@@ -1,10 +1,11 @@
 import axios from 'axios';
 
-// VULNERABILITY (CWE-798): Hardcoded API URL
-// The API endpoint is hardcoded, making it difficult to manage
+// VULNERABILITY (CWE-798): Hardcoded API URL (fallback)
+// The API endpoint defaults to localhost, making it difficult to manage
 // different environments (dev, staging, prod) and exposing
 // sensitive information in the compiled source code.
-const API_URL = 'http://localhost:8080/api';
+// In Choreo, this should be set via REACT_APP_API_URL environment variable
+const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8080/api';
 
 const api = axios.create({
   baseURL: API_URL,
