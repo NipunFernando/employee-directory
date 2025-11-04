@@ -4,8 +4,11 @@ import axios from 'axios';
 // The API endpoint defaults to localhost, making it difficult to manage
 // different environments (dev, staging, prod) and exposing
 // sensitive information in the compiled source code.
-// In Choreo, this should be set via REACT_APP_API_URL environment variable
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8080/api';
+// In Choreo, this is set via window.configs.apiUrl from /public/config.js
+// For local development, fallback to localhost
+const API_URL = (window as any)?.configs?.apiUrl 
+  ? (window as any).configs.apiUrl 
+  : (process.env.REACT_APP_API_URL || 'http://localhost:8080/api');
 
 const api = axios.create({
   baseURL: API_URL,
