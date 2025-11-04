@@ -1,0 +1,19 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+backend
+
+# Test binary
+*.test
+
+# Output files
+*.out
+*.log
+
+# Env files
+.env
+.env.*
+!.env.example
