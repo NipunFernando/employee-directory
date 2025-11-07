@@ -1,0 +1,76 @@
+# +required The configuration file schema version
+schemaVersion: 1.2
+
+# +optional Incoming connection details for the component
+endpoints:
+  # +required Unique name for the endpoint.
+  # This name will be used when generating the managed API
+  - name: employee-frontend
+    # +optional Display name for the endpoint.
+    displayName: Employee Directory Frontend (V2 - Fixed)
+    # +required Service section has the user service endpoint details
+    service:
+      # +optional Context (base path) of the API that gets exposed via the endpoint.
+      basePath: /
+      # +required Numeric port value that gets exposed via the endpoint
+      port: 3000
+    # +required Type of traffic that the endpoint is accepting.
+    # Allowed values: REST, GraphQL, WS, GRPC, TCP, UDP.
+    type: REST
+    # +optional Network level visibilities of the endpoint.
+    # Accepted values: Project|Organization|Public(Default).
+    networkVisibilities: 
+      - Public
+      - Organization
+
+# +optional Outgoing connection details for the component.
+# Note: When you create a connection in Choreo UI, it will automatically generate
+# /public/config.js with window.configs.apiUrl configuration.
+# The frontend code reads from window.configs.apiUrl (see src/services/api.ts)
+# dependencies:
+#   # +optional Defines the connection references from the Internal Marketplace.
+#   connectionReferences:
+#     # +required Name of the connection.
+#     - name: backend-api-connection
+#       # +required service identifer of the dependent component.
+#       # Format: service:/ProjectName/ComponentName/Version/Revision/Visibility
+#       # Example: service:/MyProject/EmployeeBackend/v1.0/abc123/PUBLIC
+#       # When you create a connection in Choreo UI, it will automatically configure this
+#       resourceRef: service:/ProjectName/BackendComponent/v1.0/ad088/PUBLIC
+
+# +optional Defines runtime configurations
+configurations:
+  # +optional List of environment variables to be injected into the component.
+  env:
+    # Backend API URL fallback configuration
+    # Priority: window.configs.apiUrl (from Choreo connection) > REACT_APP_API_URL > localhost
+    # When using Choreo connection, window.configs.apiUrl is automatically set via /public/config.js
+    # This REACT_APP_API_URL is optional and serves as a fallback if Choreo connection is not configured
+    - name: REACT_APP_API_URL
+      # +required value source
+      # Allowed value sources: connectionRef, configForm
+      valueFrom:
+        # +required config form value source
+        configForm:
+          # +optional display name inside the config form, name will be shown in config form if not specified
+          displayName: Backend API URL (Fallback)
+          # +optional default value is true if not specified
+          required: false
+          # +optional default value is string if not specified
+          # Allowed types - string, number, boolean, secret
+          type: string
+    # Node.js OpenSSL legacy provider (required for older React Scripts)
+    - name: NODE_OPTIONS
+      # +required value source
+      # Allowed value sources: connectionRef, configForm
+      valueFrom:
+        # +required config form value source
+        configForm:
+          # +optional display name inside the config form, name will be shown in config form if not specified
+          displayName: Node.js Options
+          # +optional default value is true if not specified
+          required: false
+          # +optional default value is string if not specified
+          # Allowed types - string, number, boolean, secret
+          type: string
+
