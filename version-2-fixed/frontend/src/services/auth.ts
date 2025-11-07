@@ -30,6 +30,7 @@ export const getUserInfoFromCookie = (): UserInfo | null => {
 };
 
 // Get user info from /auth/userinfo endpoint
+// FIXED: Simplified to match working version-1 approach, but with better error handling
 export const getUserInfo = async (): Promise<UserInfo | null> => {
   try {
     const response = await fetch('/auth/userinfo', {
@@ -42,12 +43,21 @@ export const getUserInfo = async (): Promise<UserInfo | null> => {
     }
     
     if (!response.ok) {
-      throw new Error(`Failed to get user info: ${response.status}`);
+      // FIXED: Return null for non-ok responses instead of throwing
+      return null;
     }
     
-    const userInfo = await response.json();
-    return userInfo;
+    // FIXED: Try to parse JSON, catch errors gracefully (handles HTML responses)
+    try {
+      const userInfo = await response.json();
+      return userInfo;
+    } catch (parseError) {
+      // Response was not valid JSON (might be HTML error page)
+      // This can happen during redirects or errors - return null silently
+      return null;
+    }
   } catch (error) {
+    // FIXED: Better error handling - log but don't throw
     console.error('Error fetching user info:', error);
     return null;
   }
