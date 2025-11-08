@@ -1,5 +1,5 @@
 import React from 'react';
-import ReactDOM from 'react-dom';
+import { createRoot } from 'react-dom/client';
 import './index.css';
 import App from './App';
 
@@ -10,11 +10,12 @@ if (!rootElement) {
 }
 
 try {
-  ReactDOM.render(
+  // FIXED: Updated to React 18's createRoot API
+  const root = createRoot(rootElement);
+  root.render(
     <React.StrictMode>
       <App />
-    </React.StrictMode>,
-    rootElement
+    </React.StrictMode>
   );
 } catch (error) {
   console.error('Error rendering React app:', error);
