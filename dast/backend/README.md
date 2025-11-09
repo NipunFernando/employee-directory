@@ -2,6 +2,15 @@
 
 Automated DAST security scanning for the Go Backend service using OWASP ZAP.
 
+## Deployment in Choreo
+
+1. Create a new **Scheduled Task** component in Choreo
+2. Connect your repository
+3. Configure build settings:
+   - **Dockerfile Path**: `dast/backend/Dockerfile`
+   - **Build Context**: `dast/backend` (IMPORTANT: Must match the directory containing the Dockerfile)
+4. Deploy to DEV environment
+
 ## Configuration
 
 ### Environment Variables
