@@ -41,5 +41,4 @@ spec:
           displayName: Scan Type
           required: false
           type: string
-          defaultValue: baseline
-          # Options: baseline (faster) or full (comprehensive)
+          defaultValue: "baseline"
