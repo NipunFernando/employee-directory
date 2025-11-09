@@ -1,0 +1,45 @@
+# .choreo/component.yaml
+apiVersion: core.choreo.dev/v1beta1
+kind: ScheduledTask
+metadata:
+  name: dast-react-frontend
+spec:
+  displayName: "DAST - React Frontend Scanner"
+  description: "Automated DAST security scanning for React Frontend application"
+  schedule:
+    expression: "30 2 * * *"  # Daily at 2:30 AM (30 min after Go backend)
+    timezone: "UTC"
+  env:
+    - name: REACT_FRONTEND_URL
+      valueFrom:
+        configForm:
+          displayName: Frontend URL
+          required: true
+          type: string
+    - name: REACT_SESSION_COOKIE
+      valueFrom:
+        configForm:
+          displayName: Session Cookie (optional, for authenticated scans)
+          required: false
+          type: secret
+    - name: SLACK_WEBHOOK_URL
+      valueFrom:
+        configForm:
+          displayName: Slack Webhook URL (optional)
+          required: false
+          type: secret
+    - name: SCAN_TIMEOUT_MINUTES
+      valueFrom:
+        configForm:
+          displayName: Scan Timeout (minutes)
+          required: false
+          type: number
+          defaultValue: 15
+    - name: SCAN_TYPE
+      valueFrom:
+        configForm:
+          displayName: Scan Type
+          required: false
+          type: string
+          defaultValue: baseline
+          # Options: baseline (faster) or full (comprehensive)

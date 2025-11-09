@@ -1,0 +1,373 @@
+#!/bin/bash
+set -e
+
+echo "=========================================="
+echo "DAST - Backend Employee Directory Scanner"
+echo "=========================================="
+echo "Scan started: $(date)"
+echo ""
+
+# Configuration from environment variables
+BASE_URL="${GO_BACKEND_URL}"
+AUTH_TOKEN="${GO_BACKEND_TOKEN}"
+SLACK_WEBHOOK="${SLACK_WEBHOOK_URL}"
+SCAN_TIMEOUT="${SCAN_TIMEOUT_MINUTES:-10}"
+
+# Validate required variables
+if [ -z "$BASE_URL" ]; then
+    echo "ERROR: GO_BACKEND_URL is required"
+    echo "Example: https://[uuid]-dev.e1-us-east-azure.choreoapis.dev/[org]/[service]/v1.0"
+    exit 1
+fi
+
+if [ -z "$AUTH_TOKEN" ]; then
+    echo "ERROR: GO_BACKEND_TOKEN is required"
+    exit 1
+fi
+
+echo "Configuration:"
+echo "  Base URL: $BASE_URL"
+echo "  Timeout: $SCAN_TIMEOUT minutes"
+echo ""
+
+REPORT_DIR="/zap/wrk/reports"
+mkdir -p "$REPORT_DIR"
+
+# ============================================
+# Check Service Availability
+# ============================================
+echo "Checking Backend Employee Directory availability..."
+
+MAX_RETRIES=5
+RETRY_COUNT=0
+
+while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+    # Test the health endpoint first (doesn't require auth)
+    HEALTH_URL="${BASE_URL%/}/health"
+    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_URL" || echo "000")
+    
+    if [ "$HTTP_CODE" = "200" ]; then
+        echo "Backend health check passed (HTTP $HTTP_CODE)"
+        
+        # Test API endpoint with authentication
+        API_URL="${BASE_URL%/}/api/employees"
+        API_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Test-Key: $AUTH_TOKEN" \
+            -H "accept: */*" \
+            "$API_URL" || echo "000")
+        
+        if [ "$API_HTTP_CODE" = "200" ] || [ "$API_HTTP_CODE" = "401" ]; then
+            echo "Backend API is accessible (HTTP $API_HTTP_CODE)"
+            break
+        else
+            echo "Health check passed but API returned HTTP $API_HTTP_CODE"
+            echo "Continuing with scan anyway..."
+            break
+        fi
+    fi
+    
+    RETRY_COUNT=$((RETRY_COUNT + 1))
+    echo "Attempt $RETRY_COUNT/$MAX_RETRIES - HTTP $HTTP_CODE - waiting 10s..."
+    sleep 10
+done
+
+if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
+    echo "ERROR: Backend is not accessible after $MAX_RETRIES attempts"
+    echo "Please verify:"
+    echo "  1. Service is deployed to DEV environment"
+    echo "  2. URL is correct: $BASE_URL"
+    echo "  3. GO_BACKEND_TOKEN (Test-Key) is valid"
+    
+    # Send failure notification
+    if [ -n "$SLACK_WEBHOOK" ]; then
+        curl -X POST "$SLACK_WEBHOOK" \
+            -H 'Content-Type: application/json' \
+            -d "{\"text\":\":warning: *DAST Backend Employee Directory* - Service not accessible (HTTP $HTTP_CODE). Scan aborted.\n\nURL: \`$BASE_URL\`\"}" \
+            2>/dev/null || true
+    fi
+    
+    exit 1
+fi
+
+echo ""
+
+# ============================================
+# Create ZAP Authentication Script
+# ============================================
+echo "Preparing ZAP authentication configuration..."
+
+cat > /zap/wrk/add-test-key.js << 'EOF'
+function sendingRequest(msg, initiator, helper) {
+    var testKey = org.parosproxy.paros.model.Model.getSingleton()
+                  .getOptionsParam().getConfig().getString("testkey");
+    
+    if (testKey) {
+        msg.getRequestHeader().setHeader("Test-Key", testKey);
+        msg.getRequestHeader().setHeader("accept", "*/*");
+    }
+}
+
+function responseReceived(msg, initiator, helper) {
+    // Nothing to do
+}
+EOF
+
+echo "Authentication script created"
+echo ""
+
+# ============================================
+# Run ZAP Baseline Scan
+# ============================================
+echo "=========================================="
+echo "Starting ZAP Baseline Scan"
+echo "=========================================="
+echo ""
+echo "Target: $BASE_URL"
+echo "This will scan all endpoints under the base URL"
+echo ""
+
+# Ensure BASE_URL doesn't end with / for ZAP scanning
+SCAN_URL="${BASE_URL%/}"
+
+zap-baseline.py \
+    -t "$SCAN_URL" \
+    -z "-config testkey=$AUTH_TOKEN -script /zap/wrk/add-test-key.js" \
+    -J "$REPORT_DIR/backend-employee-zap.json" \
+    -r "$REPORT_DIR/backend-employee-zap.html" \
+    -w "$REPORT_DIR/backend-employee-zap.md" \
+    -x "$REPORT_DIR/backend-employee-zap.xml" \
+    -m "$SCAN_TIMEOUT" \
+    -I || true
+
+echo ""
+echo "ZAP scan completed"
+echo ""
+
+# ============================================
+# Parse and Display Results
+# ============================================
+echo "=========================================="
+echo "Scan Results"
+echo "=========================================="
+
+if [ ! -f "$REPORT_DIR/backend-employee-zap.json" ]; then
+    echo "ERROR: Scan report not generated"
+    
+    if [ -n "$SLACK_WEBHOOK" ]; then
+        curl -X POST "$SLACK_WEBHOOK" \
+            -H 'Content-Type: application/json' \
+            -d '{"text":":x: *DAST Backend Employee Directory* - Scan failed. No report generated."}' \
+            2>/dev/null || true
+    fi
+    
+    exit 1
+fi
+
+# Parse results with Python
+python3 << 'PYCODE'
+import json
+import sys
+import os
+
+report_file = "/zap/wrk/reports/backend-employee-zap.json"
+
+try:
+    with open(report_file, "r") as f:
+        data = json.load(f)
+    
+    alerts = []
+    for site in data.get("site", []):
+        alerts.extend(site.get("alerts", []))
+    
+    # Count by severity
+    high = sum(1 for a in alerts if a.get("riskcode") == "3")
+    medium = sum(1 for a in alerts if a.get("riskcode") == "2")
+    low = sum(1 for a in alerts if a.get("riskcode") == "1")
+    info = sum(1 for a in alerts if a.get("riskcode") == "0")
+    
+    total = high + medium + low + info
+    
+    print(f"\nVulnerability Summary:")
+    print(f"  Total Alerts: {total}")
+    print(f"  High Risk:    {high}")
+    print(f"  Medium Risk:  {medium}")
+    print(f"  Low Risk:     {low}")
+    print(f"  Info:         {info}")
+    print("")
+    
+    # Display high-risk vulnerabilities
+    if high > 0:
+        print("=" * 60)
+        print("HIGH RISK VULNERABILITIES:")
+        print("=" * 60)
+        for a in alerts:
+            if a.get("riskcode") == "3":
+                name = a.get("name", "Unknown")
+                desc = a.get("desc", "No description")[:300]
+                solution = a.get("solution", "No solution provided")[:200]
+                urls = a.get("instances", [])
+                
+                print(f"\n[!] {name}")
+                print(f"    Description: {desc}...")
+                print(f"    Solution: {solution}...")
+                
+                if urls:
+                    print(f"    Affected URLs ({len(urls)}):")
+                    for idx, instance in enumerate(urls[:3], 1):
+                        url = instance.get("uri", "N/A")
+                        print(f"      {idx}. {url}")
+                    if len(urls) > 3:
+                        print(f"      ... and {len(urls) - 3} more")
+        print("")
+    
+    # Display medium-risk vulnerabilities (top 5)
+    if medium > 0:
+        print("=" * 60)
+        print("MEDIUM RISK VULNERABILITIES (top 5):")
+        print("=" * 60)
+        count = 0
+        for a in alerts:
+            if a.get("riskcode") == "2" and count < 5:
+                name = a.get("name", "Unknown")
+                instances = len(a.get("instances", []))
+                print(f"  [{count+1}] {name} ({instances} instance{'s' if instances != 1 else ''})")
+                count += 1
+        if medium > 5:
+            print(f"  ... and {medium - 5} more")
+        print("")
+    
+    # Common API security checks
+    print("=" * 60)
+    print("API Security Checklist:")
+    print("=" * 60)
+    
+    security_checks = {
+        "Missing Anti-clickjacking Header": ("X-Frame-Options", False),
+        "Content Security Policy (CSP) Header Not Set": ("CSP", False),
+        "Strict-Transport-Security Header Not Set": ("HSTS", False),
+        "X-Content-Type-Options Header Missing": ("X-Content-Type-Options", False),
+        "Server Leaks Version Information": ("Server Version", False),
+        "Information Disclosure": ("Info Disclosure", False)
+    }
+    
+    for alert in alerts:
+        name = alert.get("name", "")
+        for check_name in security_checks.keys():
+            if check_name in name:
+                security_checks[check_name] = (security_checks[check_name][0], True)
+    
+    for check_name, (short_name, found) in security_checks.items():
+        if found:
+            print(f"  [!] {short_name}: FOUND")
+        else:
+            print(f"  [✓] {short_name}: OK")
+    
+    print("")
+    
+    # Save summary for Slack
+    summary = {
+        "total": total,
+        "high": high,
+        "medium": medium,
+        "low": low,
+        "info": info,
+        "high_details": []
+    }
+    
+    # Extract high vulnerability names for Slack
+    for a in alerts:
+        if a.get("riskcode") == "3":
+            summary["high_details"].append({
+                "name": a.get("name", "Unknown"),
+                "count": len(a.get("instances", []))
+            })
+    
+    with open("/zap/wrk/reports/summary.json", "w") as f:
+        json.dump(summary, f)
+    
+    # Exit with error if high-risk vulnerabilities found
+    sys.exit(1 if high > 0 else 0)
+    
+except Exception as e:
+    print(f"ERROR: Failed to parse results: {e}", file=sys.stderr)
+    import traceback
+    traceback.print_exc()
+    sys.exit(2)
+PYCODE
+
+SCAN_EXIT_CODE=$?
+
+# ============================================
+# Send Slack Notification
+# ============================================
+if [ -n "$SLACK_WEBHOOK" ]; then
+    echo "Sending Slack notification..."
+    
+    if [ -f "$REPORT_DIR/summary.json" ]; then
+        SUMMARY=$(cat "$REPORT_DIR/summary.json")
+        HIGH=$(echo "$SUMMARY" | jq -r '.high')
+        MEDIUM=$(echo "$SUMMARY" | jq -r '.medium')
+        LOW=$(echo "$SUMMARY" | jq -r '.low')
+        TOTAL=$(echo "$SUMMARY" | jq -r '.total')
+        
+        # Determine status and emoji
+        if [ "$HIGH" -gt 0 ]; then
+            EMOJI=":rotating_light:"
+            STATUS="FAILED - High Risk Vulnerabilities Found"
+            COLOR="danger"
+            
+            # Get high vulnerability names
+            HIGH_DETAILS=$(echo "$SUMMARY" | jq -r '.high_details[] | "  • \(.name) (\(.count) instance\(if .count > 1 then "s" else "" end))"' | head -n 3)
+            
+            MESSAGE="$EMOJI *DAST - Backend Employee Directory*\n\n*Status:* $STATUS\n*Scan Date:* $(date '+%Y-%m-%d %H:%M:%S')\n\n*Results:*\n  Total: $TOTAL\n  :red_circle: High: $HIGH\n  :large_orange_diamond: Medium: $MEDIUM\n  :white_circle: Low: $LOW\n\n*High Risk Issues:*\n$HIGH_DETAILS\n\n*Target:* Backend Employee API\n*URL:* \`$BASE_URL\`\n*Action Required:* Review and fix high-risk vulnerabilities"
+        elif [ "$MEDIUM" -gt 5 ]; then
+            EMOJI=":warning:"
+            STATUS="WARNING - Multiple Medium Risk Issues"
+            COLOR="warning"
+            
+            MESSAGE="$EMOJI *DAST - Backend Employee Directory*\n\n*Status:* $STATUS\n*Scan Date:* $(date '+%Y-%m-%d %H:%M:%S')\n\n*Results:*\n  Total: $TOTAL\n  :white_circle: High: $HIGH\n  :large_orange_diamond: Medium: $MEDIUM\n  :white_circle: Low: $LOW\n\n*Target:* Backend Employee API\n*URL:* \`$BASE_URL\`\n*Recommendation:* Review medium-risk findings"
+        else
+            EMOJI=":shield:"
+            STATUS="PASSED"
+            COLOR="good"
+            
+            MESSAGE="$EMOJI *DAST - Backend Employee Directory*\n\n*Status:* $STATUS\n*Scan Date:* $(date '+%Y-%m-%d %H:%M:%S')\n\n*Results:*\n  Total: $TOTAL\n  :white_check_mark: High: $HIGH\n  :white_circle: Medium: $MEDIUM\n  :white_circle: Low: $LOW\n\n*Target:* Backend Employee API\n*URL:* \`$BASE_URL\`\n*Security Status:* No high-risk vulnerabilities detected"
+        fi
+        
+        curl -X POST "$SLACK_WEBHOOK" \
+            -H 'Content-Type: application/json' \
+            -d "{\"text\":\"$MESSAGE\"}" \
+            2>/dev/null || echo "Failed to send Slack notification"
+    else
+        curl -X POST "$SLACK_WEBHOOK" \
+            -H 'Content-Type: application/json' \
+            -d '{"text":":shield: *DAST - Backend Employee Directory* scan completed. Check logs for details."}' \
+            2>/dev/null || echo "Failed to send Slack notification"
+    fi
+fi
+
+# ============================================
+# Cleanup and Exit
+# ============================================
+echo ""
+echo "=========================================="
+echo "Scan completed: $(date)"
+echo "=========================================="
+echo ""
+echo "Reports available in logs above"
+echo "Report files:"
+echo "  - HTML: $REPORT_DIR/backend-employee-zap.html"
+echo "  - JSON: $REPORT_DIR/backend-employee-zap.json"
+echo "  - XML:  $REPORT_DIR/backend-employee-zap.xml"
+echo "  - Markdown: $REPORT_DIR/backend-employee-zap.md"
+echo ""
+
+if [ $SCAN_EXIT_CODE -eq 1 ]; then
+    echo "STATUS: FAILED (High-risk vulnerabilities found)"
+elif [ $SCAN_EXIT_CODE -eq 2 ]; then
+    echo "STATUS: ERROR (Scan parsing failed)"
+else
+    echo "STATUS: PASSED (No high-risk vulnerabilities)"
+fi
+
+exit $SCAN_EXIT_CODE

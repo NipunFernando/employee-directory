@@ -1,0 +1,47 @@
+# .choreo/component.yaml
+apiVersion: core.choreo.dev/v1beta1
+kind: ScheduledTask
+metadata:
+  name: dast-go-backend
+spec:
+  displayName: "DAST - Go Backend Scanner"
+  description: "Manual DAST scan after Go Backend deployment"
+  
+  # Schedule disabled - manual trigger only
+  schedule:
+    enabled: false
+  
+  # Allow manual execution
+  manualExecution:
+    enabled: true
+  
+  # Configuration as environment variables (easily updatable)
+  env:
+    - name: GO_BACKEND_URL
+      valueFrom:
+        configForm:
+          displayName: Backend URL
+          required: true
+          type: string
+    
+    - name: GO_BACKEND_TOKEN
+      valueFrom:
+        configForm:
+          displayName: Backend Test-Key Token
+          required: true
+          type: secret
+    
+    - name: SLACK_WEBHOOK_URL
+      valueFrom:
+        configForm:
+          displayName: Slack Webhook URL (optional)
+          required: false
+          type: secret
+    
+    - name: SCAN_TIMEOUT_MINUTES
+      valueFrom:
+        configForm:
+          displayName: Scan Timeout (minutes)
+          required: false
+          type: number
+          defaultValue: 10
