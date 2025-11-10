@@ -24,26 +24,19 @@ endpoints:
       - Organization
 
 # +optional Outgoing connection details for the component.
-dependencies:
-  # +optional Defines the connection references from the Internal Marketplace.
-  connectionReferences:
-    # +required Name of the connection.
-    # Choreo automatically provides environment variables based on this connection name:
-    # - CHOREO_DEVDB_CONNECTIONSTRING
-    # - CHOREO_DEVDB_DBUSERNAME
-    # - CHOREO_DEVDB_DBUSERPASSWORD
-    - name: devdb
-      # +required service identifer of the dependent component.
-      resourceRef: database:pge-mssql-db-dev
+# dependencies:
+#   # +optional Defines the connection references from the Internal Marketplace.
+#   connectionReferences:
+#     # +required Name of the connection.
+#     - name: postgres-connection
+#       # +required service identifer of the dependent component.
+#       resourceRef: service:/ProjectName/PostgresComponent/v1/ad088/PUBLIC
 
 # +optional Defines runtime configurations
 configurations:
   # +optional List of environment variables to be injected into the component.
   env:
-    # Note: Choreo connection 'devdb' (defined in dependencies above) automatically provides:
-    # CHOREO_DEVDB_CONNECTIONSTRING, CHOREO_DEVDB_DBUSERNAME, CHOREO_DEVDB_DBUSERPASSWORD
-    # The following DB_* variables are optional fallbacks for local development only.
-    # Database configuration environment variables (optional - for local development fallback)
+    # Database configuration environment variables
     - name: DB_HOST
       # +required value source
       # Allowed value sources: connectionRef, configForm
@@ -51,9 +44,9 @@ configurations:
         # +required config form value source
         configForm:
           # +optional display name inside the config form, name will be shown in config form if not specified
-          displayName: Database Host (Local Dev Only)
+          displayName: Database Host
           # +optional default value is true if not specified
-          required: false
+          required: true
           # +optional default value is string if not specified
           # Allowed types - string, number, boolean, secret
           type: string
@@ -64,9 +57,9 @@ configurations:
         # +required config form value source
         configForm:
           # +optional display name inside the config form, name will be shown in config form if not specified
-          displayName: Database User (Local Dev Only)
+          displayName: Database User
           # +optional default value is true if not specified
-          required: false
+          required: true
           # +optional default value is string if not specified
           # Allowed types - string, number, boolean, secret
           type: string
@@ -77,9 +70,9 @@ configurations:
         # +required config form value source
         configForm:
           # +optional display name inside the config form, name will be shown in config form if not specified
-          displayName: Database Password (Local Dev Only)
+          displayName: Database Password
           # +optional default value is true if not specified
-          required: false
+          required: true
           # +optional default value is string if not specified
           # Allowed types - string, number, boolean, secret
           type: secret
@@ -90,9 +83,9 @@ configurations:
         # +required config form value source
         configForm:
           # +optional display name inside the config form, name will be shown in config form if not specified
-          displayName: Database Name (Local Dev Only)
+          displayName: Database Name
           # +optional default value is true if not specified
-          required: false
+          required: true
           # +optional default value is string if not specified
           # Allowed types - string, number, boolean, secret
           type: string
