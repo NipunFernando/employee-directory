@@ -246,19 +246,60 @@ python3 "$ZAP_BASELINE_PATCHED" \
 echo ""
 echo "ZAP scan exit code: ${ZAP_EXIT_CODE:-0}"
 echo "Checking for generated reports..."
+
+# Check ZAP session directory (automation framework might write here)
+ZAP_SESSION_DIR="$WORK_DIR/.zap/session"
+if [ -d "$ZAP_SESSION_DIR" ]; then
+    echo "Checking ZAP session directory: $ZAP_SESSION_DIR"
+    find "$ZAP_SESSION_DIR" -name "*.json" -o -name "*.html" -o -name "*.xml" -o -name "*.md" 2>/dev/null | head -10
+fi
+
+# Check automation framework output location
+AUTOMATION_OUTPUT="$WORK_DIR/zap_wrk"
+if [ -d "$AUTOMATION_OUTPUT" ]; then
+    echo "Checking automation framework output: $AUTOMATION_OUTPUT"
+    find "$AUTOMATION_OUTPUT" -name "*.json" -o -name "*.html" -o -name "*.xml" -o -name "*.md" 2>/dev/null | head -10
+fi
+
+# Check home directory where YAML was created
+if [ -d "$WORK_DIR/home" ]; then
+    echo "Checking home directory: $WORK_DIR/home"
+    find "$WORK_DIR/home" -name "*.json" -o -name "*.html" -o -name "*.xml" -o -name "*.md" 2>/dev/null | head -10
+    # Check the automation framework YAML file
+    if [ -f "$WORK_DIR/home/zap.yaml" ]; then
+        echo "Automation framework YAML file found:"
+        head -50 "$WORK_DIR/home/zap.yaml" 2>/dev/null || true
+    fi
+fi
+
+# Check report directory
 ls -la "$REPORT_DIR/" 2>/dev/null || echo "Report directory not accessible"
 echo ""
+
 echo "ZAP scan completed"
 echo ""
 
-# Check for reports in multiple possible locations
+# Check for reports in multiple possible locations (including automation framework locations)
 REPORT_FOUND=""
 for possible_report in \
     "$REPORT_DIR/backend-employee-zap.json" \
     "$WORK_DIR/zap_wrk/reports/backend-employee-zap.json" \
-    "/tmp/reports/backend-employee-zap.json" \
-    "$WORK_DIR/backend-employee-zap.json"; do
-    if [ -f "$possible_report" ]; then
+    "$WORK_DIR/zap_wrk/backend-employee-zap.json" \
+    "$WORK_DIR/backend-employee-zap.json" \
+    "$WORK_DIR/home/backend-employee-zap.json" \
+    "$WORK_DIR/.zap/session/*/backend-employee-zap.json" \
+    "/tmp/reports/backend-employee-zap.json"; do
+    # Handle wildcards
+    if [[ "$possible_report" == *"*"* ]]; then
+        for found in $possible_report; do
+            if [ -f "$found" ]; then
+                echo "Found report at: $found"
+                REPORT_FOUND="$found"
+                cp "$found" "$REPORT_DIR/backend-employee-zap.json" 2>/dev/null || true
+                break 2
+            fi
+        done
+    elif [ -f "$possible_report" ]; then
         echo "Found report at: $possible_report"
         REPORT_FOUND="$possible_report"
         # Copy to our expected location if different
@@ -269,10 +310,24 @@ for possible_report in \
     fi
 done
 
+# If still not found, search more broadly
 if [ -z "$REPORT_FOUND" ]; then
     echo "WARNING: No report found in expected locations"
-    echo "Checking for any JSON files in work directory..."
-    find "$WORK_DIR" -name "*.json" -type f 2>/dev/null | head -5 || true
+    echo "Searching for any ZAP report files..."
+    find "$WORK_DIR" -type f \( -name "*zap*.json" -o -name "*report*.json" \) 2>/dev/null | head -10
+    # Also check for files with "backend" or "employee" in name
+    find "$WORK_DIR" -type f -name "*.json" 2>/dev/null | grep -i -E "(backend|employee|zap)" | head -10
+    
+    # Analyze scan output to see what happened
+    echo ""
+    echo "Analyzing ZAP scan output for clues..."
+    if [ -f "$WORK_DIR/zap-scan-output.log" ]; then
+        echo "--- Scan Summary from Log ---"
+        grep -i -E "(scan|url|endpoint|spider|found|discovered|error|fail)" "$WORK_DIR/zap-scan-output.log" | tail -20 || true
+        echo ""
+        echo "--- Full scan output (last 100 lines) ---"
+        tail -100 "$WORK_DIR/zap-scan-output.log" || true
+    fi
 fi
 echo ""
 
