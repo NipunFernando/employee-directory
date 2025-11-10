@@ -119,7 +119,12 @@ for i in {1..12}; do
     fi
     if [ $i -eq 12 ]; then
         echo "❌ ZAP failed to start after 60 seconds"
-        cat "$WORK_DIR/zap-startup.log" 2>/dev/null || true
+        echo ""
+        echo "ZAP startup log:"
+        cat "$WORK_DIR/zap-startup.log" 2>/dev/null || echo "No startup log found"
+        echo ""
+        echo "Checking if ZAP process is running..."
+        ps aux | grep -i zap | grep -v grep || echo "No ZAP process found"
         exit 1
     fi
 done
