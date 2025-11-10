@@ -1,6 +1,8 @@
 # Dockerfile
 FROM ghcr.io/zaproxy/zaproxy:stable
 
+# Switch to root to install packages
+USER root
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
@@ -17,8 +19,7 @@ RUN chmod +x /usr/local/bin/dast-scan.sh
 # Ensure script has proper line endings
 RUN sed -i 's/\r$//' /usr/local/bin/dast-scan.sh || true
 
-
-# Install additional tools
+# Switch back to non-root user
 USER 10001
 
 WORKDIR /zap
