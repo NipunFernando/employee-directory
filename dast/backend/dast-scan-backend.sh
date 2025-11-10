@@ -220,7 +220,18 @@ export PYTHONPATH="/zap:$PYTHONPATH"
 # Run ZAP baseline scan with patched script from /zap directory
 # This ensures all imports work correctly
 echo "Starting ZAP scan (this may take several minutes)..."
+echo "Report directory: $REPORT_DIR"
+echo "Work directory: $WORK_DIR"
 cd /zap
+
+# Run ZAP with verbose output to see what's happening
+# Add -d flag for debug output and -g for generate report
+echo "Running ZAP scan with the following parameters:"
+echo "  Target: $SCAN_URL"
+echo "  Timeout: $SCAN_TIMEOUT minutes"
+echo "  Reports will be saved to: $REPORT_DIR"
+echo ""
+
 python3 "$ZAP_BASELINE_PATCHED" \
     -t "$SCAN_URL" \
     -z "-config testkey=$AUTH_TOKEN -script $WORK_DIR/add-test-key.js" \
@@ -229,10 +240,40 @@ python3 "$ZAP_BASELINE_PATCHED" \
     -w "$REPORT_DIR/backend-employee-zap.md" \
     -x "$REPORT_DIR/backend-employee-zap.xml" \
     -m "$SCAN_TIMEOUT" \
-    -I || true
+    -d \
+    -I 2>&1 | tee "$WORK_DIR/zap-scan-output.log" || ZAP_EXIT_CODE=$?
 
 echo ""
+echo "ZAP scan exit code: ${ZAP_EXIT_CODE:-0}"
+echo "Checking for generated reports..."
+ls -la "$REPORT_DIR/" 2>/dev/null || echo "Report directory not accessible"
+echo ""
 echo "ZAP scan completed"
+echo ""
+
+# Check for reports in multiple possible locations
+REPORT_FOUND=""
+for possible_report in \
+    "$REPORT_DIR/backend-employee-zap.json" \
+    "$WORK_DIR/zap_wrk/reports/backend-employee-zap.json" \
+    "/tmp/reports/backend-employee-zap.json" \
+    "$WORK_DIR/backend-employee-zap.json"; do
+    if [ -f "$possible_report" ]; then
+        echo "Found report at: $possible_report"
+        REPORT_FOUND="$possible_report"
+        # Copy to our expected location if different
+        if [ "$possible_report" != "$REPORT_DIR/backend-employee-zap.json" ]; then
+            cp "$possible_report" "$REPORT_DIR/backend-employee-zap.json" 2>/dev/null || true
+        fi
+        break
+    fi
+done
+
+if [ -z "$REPORT_FOUND" ]; then
+    echo "WARNING: No report found in expected locations"
+    echo "Checking for any JSON files in work directory..."
+    find "$WORK_DIR" -name "*.json" -type f 2>/dev/null | head -5 || true
+fi
 echo ""
 
 # ============================================
@@ -242,27 +283,43 @@ echo "=========================================="
 echo "Scan Results"
 echo "=========================================="
 
-if [ ! -f "$REPORT_DIR/backend-employee-zap.json" ]; then
+# Check if report exists (use the found report if available)
+if [ -n "$REPORT_FOUND" ] && [ -f "$REPORT_FOUND" ]; then
+    REPORT_FILE="$REPORT_FOUND"
+elif [ -f "$REPORT_DIR/backend-employee-zap.json" ]; then
+    REPORT_FILE="$REPORT_DIR/backend-employee-zap.json"
+else
     echo "ERROR: Scan report not generated"
+    echo "Checked locations:"
+    echo "  - $REPORT_DIR/backend-employee-zap.json"
+    echo "  - $WORK_DIR/zap_wrk/reports/backend-employee-zap.json"
+    echo "  - /tmp/reports/backend-employee-zap.json"
+    echo ""
+    echo "ZAP scan output (last 50 lines):"
+    tail -50 "$WORK_DIR/zap-scan-output.log" 2>/dev/null || echo "No scan output log found"
     
     if [ -n "$SLACK_WEBHOOK" ]; then
         curl -X POST "$SLACK_WEBHOOK" \
             -H 'Content-Type: application/json' \
-            -d '{"text":":x: *DAST Backend Employee Directory* - Scan failed. No report generated."}' \
+            -d '{"text":":x: *DAST Backend Employee Directory* - Scan failed. No report generated. Check logs for details."}' \
             2>/dev/null || true
     fi
     
     exit 1
 fi
 
+echo "Using report file: $REPORT_FILE"
+
 # Parse results with Python
+export REPORT_FILE
 export REPORT_DIR
 python3 << PYCODE
 import json
 import sys
 import os
 
-report_file = os.path.join(os.environ.get('REPORT_DIR', '/zap/wrk/reports'), 'backend-employee-zap.json')
+# Use the report file we found
+report_file = os.environ.get('REPORT_FILE', os.path.join(os.environ.get('REPORT_DIR', '/zap/wrk/reports'), 'backend-employee-zap.json'))
 
 try:
     with open(report_file, "r") as f:
@@ -377,7 +434,14 @@ try:
     
     summary_file = os.path.join(os.environ.get('REPORT_DIR', '/zap/wrk/reports'), 'summary.json')
     with open(summary_file, "w") as f:
-        json.dump(summary, f)
+        json.dump(summary, f, indent=2)
+    
+    # Print summary to console for logging
+    print("=" * 60)
+    print("SUMMARY (for logs and Slack):")
+    print("=" * 60)
+    print(json.dumps(summary, indent=2))
+    print("=" * 60)
     
     # Exit with error if high-risk vulnerabilities found
     sys.exit(1 if high > 0 else 0)
@@ -392,13 +456,54 @@ PYCODE
 SCAN_EXIT_CODE=$?
 
 # ============================================
+# Display Summary File Content
+# ============================================
+echo ""
+echo "=========================================="
+echo "Summary File Content"
+echo "=========================================="
+if [ -f "$REPORT_DIR/summary.json" ]; then
+    echo "Summary file location: $REPORT_DIR/summary.json"
+    cat "$REPORT_DIR/summary.json"
+    echo ""
+else
+    echo "WARNING: Summary file not found at $REPORT_DIR/summary.json"
+    # Try to find it in other locations
+    for possible_summary in \
+        "$WORK_DIR/summary.json" \
+        "$WORK_DIR/zap_wrk/reports/summary.json" \
+        "/tmp/reports/summary.json"; do
+        if [ -f "$possible_summary" ]; then
+            echo "Found summary at: $possible_summary"
+            cat "$possible_summary"
+            cp "$possible_summary" "$REPORT_DIR/summary.json" 2>/dev/null || true
+            break
+        fi
+    done
+    echo ""
+fi
+
+# ============================================
 # Send Slack Notification
 # ============================================
 if [ -n "$SLACK_WEBHOOK" ]; then
     echo "Sending Slack notification..."
     
-    if [ -f "$REPORT_DIR/summary.json" ]; then
-        SUMMARY=$(cat "$REPORT_DIR/summary.json")
+    # Try multiple locations for summary file
+    SUMMARY_FILE=""
+    for possible_summary in \
+        "$REPORT_DIR/summary.json" \
+        "$WORK_DIR/summary.json" \
+        "$WORK_DIR/zap_wrk/reports/summary.json" \
+        "/tmp/reports/summary.json"; do
+        if [ -f "$possible_summary" ]; then
+            SUMMARY_FILE="$possible_summary"
+            break
+        fi
+    done
+    
+    if [ -n "$SUMMARY_FILE" ] && [ -f "$SUMMARY_FILE" ]; then
+        SUMMARY=$(cat "$SUMMARY_FILE")
         HIGH=$(echo "$SUMMARY" | jq -r '.high')
         MEDIUM=$(echo "$SUMMARY" | jq -r '.medium')
         LOW=$(echo "$SUMMARY" | jq -r '.low')
