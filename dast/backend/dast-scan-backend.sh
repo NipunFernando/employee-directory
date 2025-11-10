@@ -58,6 +58,41 @@ while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
         "${BASE_URL%/}"
     )
     
+    # Try choreo-apis pattern (used by Choreo frontend apps)
+    # Extract path after domain (org/service/version)
+    if [[ "$BASE_URL" =~ (https?://[^/]+)(/.+)? ]]; then
+        GATEWAY_BASE="${BASH_REMATCH[1]}"
+        PATH_PART="${BASH_REMATCH[2]}"
+        
+        if [ -n "$PATH_PART" ]; then
+            # Remove leading slash and trailing version if present
+            PATH_PART="${PATH_PART#/}"
+            # Remove version suffix (v1.0 or v1) to get org/service
+            ORG_SERVICE="${PATH_PART%/*}"
+            VERSION="${PATH_PART##*/}"
+            
+            # Try with /choreo-apis prefix
+            if [ -n "$ORG_SERVICE" ] && [ "$ORG_SERVICE" != "$PATH_PART" ]; then
+                # Try with full version (v1.0)
+                API_URLS+=("${GATEWAY_BASE}/choreo-apis/${ORG_SERVICE}/${VERSION}/employees")
+                API_URLS+=("${GATEWAY_BASE}/choreo-apis/${ORG_SERVICE}/${VERSION}/api/employees")
+                # Try with version without .0 (v1)
+                VERSION_SHORT="${VERSION%.0}"
+                if [ "$VERSION_SHORT" != "$VERSION" ]; then
+                    API_URLS+=("${GATEWAY_BASE}/choreo-apis/${ORG_SERVICE}/${VERSION_SHORT}/employees")
+                    API_URLS+=("${GATEWAY_BASE}/choreo-apis/${ORG_SERVICE}/${VERSION_SHORT}/api/employees")
+                fi
+                # Try with full path as-is
+                API_URLS+=("${GATEWAY_BASE}/choreo-apis/${PATH_PART}/employees")
+                API_URLS+=("${GATEWAY_BASE}/choreo-apis/${PATH_PART}/api/employees")
+            else
+                # If no org/service separation, try with full path
+                API_URLS+=("${GATEWAY_BASE}/choreo-apis/${PATH_PART}/employees")
+                API_URLS+=("${GATEWAY_BASE}/choreo-apis/${PATH_PART}/api/employees")
+            fi
+        fi
+    fi
+    
     API_HTTP_CODE="000"
     WORKING_URL=""
     
