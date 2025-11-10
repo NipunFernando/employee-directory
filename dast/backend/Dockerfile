@@ -1,8 +1,7 @@
 # Dockerfile
 FROM ghcr.io/zaproxy/zaproxy:stable
 
-# Install additional tools
-USER 10001
+
 RUN apk add --no-cache \
     bash \
     curl \
@@ -17,8 +16,9 @@ RUN chmod +x /usr/local/bin/dast-scan.sh
 # Ensure script has proper line endings
 RUN sed -i 's/\r$//' /usr/local/bin/dast-scan.sh || true
 
-# Switch back to zap user
-USER zap
+
+# Install additional tools
+USER 10001
 
 WORKDIR /zap
 
