@@ -202,26 +202,25 @@ export ZAP_USER_DIR="$WORK_DIR/.zap"
 # Create a patched copy of the script
 echo "Preparing ZAP scan script..."
 ZAP_BASELINE_PATCHED="$WORK_DIR/zap-baseline-patched.py"
-sed "s|/zap/wrk|$WORK_DIR/zap_wrk|g" /zap/zap-baseline.py > "$ZAP_BASELINE_PATCHED" 2>/dev/null || {
-    # If sed fails, try Python-based patching
-    python3 << PYTHON_PATCH
-import sys
+python3 << PYTHON_PATCH
 with open('/zap/zap-baseline.py', 'r') as f:
     content = f.read()
+# Replace /zap/wrk with writable directory
 content = content.replace('/zap/wrk', '$WORK_DIR/zap_wrk')
 with open('$ZAP_BASELINE_PATCHED', 'w') as f:
     f.write(content)
 PYTHON_PATCH
-}
 
 chmod +x "$ZAP_BASELINE_PATCHED"
 mkdir -p "$WORK_DIR/zap_wrk"
 
-# Set working directory to writable location
-cd "$WORK_DIR"
+# Set PYTHONPATH to include /zap so zap_common can be imported
+export PYTHONPATH="/zap:$PYTHONPATH"
 
-# Run ZAP baseline scan with patched script
+# Run ZAP baseline scan with patched script from /zap directory
+# This ensures all imports work correctly
 echo "Starting ZAP scan (this may take several minutes)..."
+cd /zap
 python3 "$ZAP_BASELINE_PATCHED" \
     -t "$SCAN_URL" \
     -z "-config testkey=$AUTH_TOKEN -script $WORK_DIR/add-test-key.js" \
