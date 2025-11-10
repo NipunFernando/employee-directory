@@ -7,6 +7,7 @@ require (
 	github.com/gin-gonic/gin v1.7.0
 	github.com/joho/godotenv v1.4.0
 	gorm.io/driver/postgres v1.4.5
+	gorm.io/driver/sqlserver v1.4.2
 	gorm.io/gorm v1.24.2
 )
 
@@ -25,7 +26,7 @@ require (
 	github.com/jackc/pgtype v1.12.0 // indirect
 	github.com/jackc/pgx/v4 v4.17.2 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
-	github.com/jinzhu/now v1.1.4 // indirect
+	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/json-iterator/go v1.1.9 // indirect
 	github.com/leodido/go-urn v1.2.0 // indirect
 	github.com/mattn/go-isatty v0.0.12 // indirect
@@ -34,10 +35,16 @@ require (
 	github.com/ugorji/go/codec v1.1.7 // indirect
 
 	// VULNERABLE: Old version with potential weaknesses
-	golang.org/x/crypto v0.0.0-20220722155217-630584e8d5aa // indirect
-	golang.org/x/sys v0.0.0-20210615035016-665e8c7367d1 // indirect
+	golang.org/x/crypto v0.0.0-20221005025214-4161e89ecf1b // indirect
+	golang.org/x/sys v0.0.0-20220224120231-95c6836cb0e7 // indirect
 	golang.org/x/text v0.3.7 // indirect
-	gopkg.in/yaml.v2 v2.2.8 // indirect
+	gopkg.in/yaml.v2 v2.4.0 // indirect
+)
+
+require (
+	github.com/golang-sql/civil v0.0.0-20220223132316-b832511892a9 // indirect
+	github.com/golang-sql/sqlexp v0.1.0 // indirect
+	github.com/microsoft/go-mssqldb v0.19.0 // indirect
 )
 
 // ... other indirect dependencies will be added by `go mod tidy`
