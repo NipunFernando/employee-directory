@@ -26,7 +26,8 @@ func ConnectDatabase() {
 	// Read database credentials from Choreo connection environment variables
 	// VULNERABILITY (CWE-209): Information Exposure Through Error Messages
 	// If env vars are missing, the error message might expose sensitive info
-	// Choreo connection: devdb (database:pge-mssql-db-dev)
+	// Choreo connection name "devdb" (defined in component.yaml) automatically provides:
+	// CHOREO_DEVDB_CONNECTIONSTRING, CHOREO_DEVDB_DBUSERNAME, CHOREO_DEVDB_DBUSERPASSWORD
 	choreoConnectionString := os.Getenv("CHOREO_DEVDB_CONNECTIONSTRING")
 	choreoUsername := os.Getenv("CHOREO_DEVDB_DBUSERNAME")
 	choreoPassword := os.Getenv("CHOREO_DEVDB_DBUSERPASSWORD")

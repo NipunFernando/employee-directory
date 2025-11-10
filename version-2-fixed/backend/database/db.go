@@ -27,7 +27,8 @@ func ConnectDatabase() {
 
 	// Read database credentials from Choreo connection environment variables
 	// FIXED: Proper validation and error handling without exposing sensitive info
-	// Choreo connection: devdb (database:pge-mssql-db-dev)
+	// Choreo connection name "devdb" (defined in component.yaml) automatically provides:
+	// CHOREO_DEVDB_CONNECTIONSTRING, CHOREO_DEVDB_DBUSERNAME, CHOREO_DEVDB_DBUSERPASSWORD
 	choreoConnectionString := os.Getenv("CHOREO_DEVDB_CONNECTIONSTRING")
 	choreoUsername := os.Getenv("CHOREO_DEVDB_DBUSERNAME")
 	choreoPassword := os.Getenv("CHOREO_DEVDB_DBUSERPASSWORD")
