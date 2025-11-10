@@ -180,26 +180,15 @@ echo "=========================================="
 echo ""
 echo "Target: $BASE_URL"
 echo "This will scan all endpoints under the base URL"
+echo "Timeout: $SCAN_TIMEOUT minutes"
 echo ""
 
 # Ensure BASE_URL doesn't end with / for ZAP scanning
 SCAN_URL="${BASE_URL%/}"
 
 # Set ZAP environment variables to use writable directories
-# ZAP tries to write to /zap/wrk/ and /home/zap/, so we need to handle both
 export ZAP_HOME="$WORK_DIR/.zap"
 mkdir -p "$ZAP_HOME"
-
-# Create writable /zap/wrk if it doesn't exist or isn't writable
-if [ ! -w "/zap/wrk" ] 2>/dev/null; then
-    # Create symlink or ensure directory exists in writable location
-    mkdir -p "$WORK_DIR/zap_wrk"
-    # If /zap/wrk exists but isn't writable, we'll use our writable version
-    ZAP_WRK_DIR="$WORK_DIR/zap_wrk"
-else
-    ZAP_WRK_DIR="/zap/wrk"
-fi
-mkdir -p "$ZAP_WRK_DIR"
 
 # Set HOME to writable directory (ZAP may try to write to ~/zap.yaml)
 ZAP_HOME_DIR="$WORK_DIR/home"
@@ -209,16 +198,31 @@ export HOME="$ZAP_HOME_DIR"
 # Set ZAP user directory
 export ZAP_USER_DIR="$WORK_DIR/.zap"
 
-# Create automation framework YAML in writable location if needed
-AUTOMATION_YAML="$ZAP_WRK_DIR/zap.yaml"
-# zap-baseline.py will create this, but we ensure the directory is writable
+# Patch zap-baseline.py at runtime to use writable directory instead of /zap/wrk
+# Create a patched copy of the script
+echo "Preparing ZAP scan script..."
+ZAP_BASELINE_PATCHED="$WORK_DIR/zap-baseline-patched.py"
+sed "s|/zap/wrk|$WORK_DIR/zap_wrk|g" /zap/zap-baseline.py > "$ZAP_BASELINE_PATCHED" 2>/dev/null || {
+    # If sed fails, try Python-based patching
+    python3 << PYTHON_PATCH
+import sys
+with open('/zap/zap-baseline.py', 'r') as f:
+    content = f.read()
+content = content.replace('/zap/wrk', '$WORK_DIR/zap_wrk')
+with open('$ZAP_BASELINE_PATCHED', 'w') as f:
+    f.write(content)
+PYTHON_PATCH
+}
 
-# Use zap-full-scan.py which may have different path requirements than zap-baseline.py
+chmod +x "$ZAP_BASELINE_PATCHED"
+mkdir -p "$WORK_DIR/zap_wrk"
+
 # Set working directory to writable location
 cd "$WORK_DIR"
 
-# Run ZAP full scan
-zap-full-scan.py \
+# Run ZAP baseline scan with patched script
+echo "Starting ZAP scan (this may take several minutes)..."
+python3 "$ZAP_BASELINE_PATCHED" \
     -t "$SCAN_URL" \
     -z "-config testkey=$AUTH_TOKEN -script $WORK_DIR/add-test-key.js" \
     -J "$REPORT_DIR/backend-employee-zap.json" \
