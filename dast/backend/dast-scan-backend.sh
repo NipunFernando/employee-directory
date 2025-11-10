@@ -50,32 +50,45 @@ MAX_RETRIES=5
 RETRY_COUNT=0
 
 while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-    # Test the health endpoint first (doesn't require auth)
-    HEALTH_URL="${BASE_URL%/}/health"
-    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_URL" || echo "000")
+    # Test API endpoint with authentication (primary check)
+    # Try multiple possible paths since Choreo basePath configuration might affect the path
+    API_URLS=(
+        "${BASE_URL%/}/api/employees"
+        "${BASE_URL%/}/employees"
+        "${BASE_URL%/}"
+    )
     
-    if [ "$HTTP_CODE" = "200" ]; then
-        echo "Backend health check passed (HTTP $HTTP_CODE)"
-        
-        # Test API endpoint with authentication
-        API_URL="${BASE_URL%/}/api/employees"
+    API_HTTP_CODE="000"
+    WORKING_URL=""
+    
+    for TEST_URL in "${API_URLS[@]}"; do
         API_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
             -H "Test-Key: $AUTH_TOKEN" \
             -H "accept: */*" \
-            "$API_URL" || echo "000")
+            "$TEST_URL" || echo "000")
         
         if [ "$API_HTTP_CODE" = "200" ] || [ "$API_HTTP_CODE" = "401" ]; then
-            echo "Backend API is accessible (HTTP $API_HTTP_CODE)"
+            echo "Backend API is accessible at $TEST_URL (HTTP $API_HTTP_CODE)"
+            WORKING_URL="$TEST_URL"
             break
-        else
-            echo "Health check passed but API returned HTTP $API_HTTP_CODE"
-            echo "Continuing with scan anyway..."
-            break
+        fi
+    done
+    
+    if [ -n "$WORKING_URL" ]; then
+        break
+    fi
+    
+    # Optional: Test health endpoint (informational only)
+    if [ $RETRY_COUNT -eq 0 ]; then
+        HEALTH_URL="${BASE_URL%/}/health"
+        HEALTH_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_URL" || echo "000")
+        if [ "$HEALTH_CODE" = "200" ]; then
+            echo "Health endpoint is also accessible (HTTP $HEALTH_CODE)"
         fi
     fi
     
     RETRY_COUNT=$((RETRY_COUNT + 1))
-    echo "Attempt $RETRY_COUNT/$MAX_RETRIES - HTTP $HTTP_CODE - waiting 10s..."
+    echo "Attempt $RETRY_COUNT/$MAX_RETRIES - API returned HTTP $API_HTTP_CODE - waiting 10s..."
     sleep 10
 done
 
