@@ -52,10 +52,15 @@ cleanup() {
     echo ""
     echo "Cleaning up..."
     if [ -n "$ZAP_PID" ]; then
-        # Try graceful shutdown with timeout
-        timeout 5 curl -s "http://localhost:8090/JSON/core/action/shutdown/" > /dev/null 2>&1 || true
-        # Give it a moment, then kill
-        sleep 1
+        # Try graceful shutdown in background (non-blocking)
+        (curl -s --max-time 3 "http://localhost:8090/JSON/core/action/shutdown/" > /dev/null 2>&1 || true) &
+        SHUTDOWN_PID=$!
+        
+        # Wait max 2 seconds for shutdown, then kill
+        sleep 2
+        kill $SHUTDOWN_PID 2>/dev/null || true
+        
+        # Kill ZAP process
         kill $ZAP_PID 2>/dev/null || true
         sleep 1
         # Force kill if still running
