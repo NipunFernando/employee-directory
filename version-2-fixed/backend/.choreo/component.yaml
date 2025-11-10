@@ -34,7 +34,7 @@ dependencies:
     # - CHOREO_DEVDB_DBUSERPASSWORD
     - name: devdb
       # +required service identifer of the dependent component.
-      resourceRef: database:pge-mssql-db-dev
+      resourceRef: database:pge-mssql-database-dev
 
 # +optional Defines runtime configurations
 configurations:
