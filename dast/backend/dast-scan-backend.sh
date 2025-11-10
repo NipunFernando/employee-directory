@@ -213,16 +213,12 @@ export ZAP_USER_DIR="$WORK_DIR/.zap"
 AUTOMATION_YAML="$ZAP_WRK_DIR/zap.yaml"
 # zap-baseline.py will create this, but we ensure the directory is writable
 
-# Ensure /zap/wrk is writable (zap-baseline.py hardcodes this path)
-# Try to create it if it doesn't exist, or use workaround
-if [ ! -w "/zap/wrk" ] 2>/dev/null; then
-    # If we can't write to /zap/wrk, try to create it or use alternative
-    # Note: This might fail if the filesystem is truly read-only
-    mkdir -p "/zap/wrk" 2>/dev/null || true
-fi
+# Use zap-full-scan.py which may have different path requirements than zap-baseline.py
+# Set working directory to writable location
+cd "$WORK_DIR"
 
-# Run ZAP scan
-zap-baseline.py \
+# Run ZAP full scan
+zap-full-scan.py \
     -t "$SCAN_URL" \
     -z "-config testkey=$AUTH_TOKEN -script $WORK_DIR/add-test-key.js" \
     -J "$REPORT_DIR/backend-employee-zap.json" \
