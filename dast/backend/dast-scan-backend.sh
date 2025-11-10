@@ -185,19 +185,43 @@ echo ""
 # Ensure BASE_URL doesn't end with / for ZAP scanning
 SCAN_URL="${BASE_URL%/}"
 
-# Set ZAP_HOME and HOME to writable directory to avoid read-only filesystem errors
-# ZAP tries to write config files to /home/zap/, so we redirect to writable location
+# Set ZAP environment variables to use writable directories
+# ZAP tries to write to /zap/wrk/ and /home/zap/, so we need to handle both
 export ZAP_HOME="$WORK_DIR/.zap"
 mkdir -p "$ZAP_HOME"
 
-# Create a fake home directory structure for ZAP
+# Create writable /zap/wrk if it doesn't exist or isn't writable
+if [ ! -w "/zap/wrk" ] 2>/dev/null; then
+    # Create symlink or ensure directory exists in writable location
+    mkdir -p "$WORK_DIR/zap_wrk"
+    # If /zap/wrk exists but isn't writable, we'll use our writable version
+    ZAP_WRK_DIR="$WORK_DIR/zap_wrk"
+else
+    ZAP_WRK_DIR="/zap/wrk"
+fi
+mkdir -p "$ZAP_WRK_DIR"
+
+# Set HOME to writable directory (ZAP may try to write to ~/zap.yaml)
 ZAP_HOME_DIR="$WORK_DIR/home"
 mkdir -p "$ZAP_HOME_DIR/zap"
 export HOME="$ZAP_HOME_DIR"
 
-# Set ZAP user directory to writable location
+# Set ZAP user directory
 export ZAP_USER_DIR="$WORK_DIR/.zap"
 
+# Create automation framework YAML in writable location if needed
+AUTOMATION_YAML="$ZAP_WRK_DIR/zap.yaml"
+# zap-baseline.py will create this, but we ensure the directory is writable
+
+# Ensure /zap/wrk is writable (zap-baseline.py hardcodes this path)
+# Try to create it if it doesn't exist, or use workaround
+if [ ! -w "/zap/wrk" ] 2>/dev/null; then
+    # If we can't write to /zap/wrk, try to create it or use alternative
+    # Note: This might fail if the filesystem is truly read-only
+    mkdir -p "/zap/wrk" 2>/dev/null || true
+fi
+
+# Run ZAP scan
 zap-baseline.py \
     -t "$SCAN_URL" \
     -z "-config testkey=$AUTH_TOKEN -script $WORK_DIR/add-test-key.js" \
