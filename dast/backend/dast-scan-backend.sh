@@ -30,7 +30,15 @@ echo "  Base URL: $BASE_URL"
 echo "  Timeout: $SCAN_TIMEOUT minutes"
 echo ""
 
-REPORT_DIR="/zap/wrk/reports"
+# Determine writable work directory (use /tmp as fallback if /zap/wrk is not writable)
+WORK_DIR="/zap/wrk"
+if ! mkdir -p "$WORK_DIR" 2>/dev/null || [ ! -w "$WORK_DIR" ]; then
+    echo "Warning: Cannot write to /zap/wrk, using /tmp instead"
+    WORK_DIR="/tmp"
+    mkdir -p "$WORK_DIR"
+fi
+
+REPORT_DIR="$WORK_DIR/reports"
 mkdir -p "$REPORT_DIR"
 
 # ============================================
@@ -96,7 +104,7 @@ echo ""
 # ============================================
 echo "Preparing ZAP authentication configuration..."
 
-cat > /zap/wrk/add-test-key.js << 'EOF'
+cat > "$WORK_DIR/add-test-key.js" << 'EOF'
 function sendingRequest(msg, initiator, helper) {
     var testKey = org.parosproxy.paros.model.Model.getSingleton()
                   .getOptionsParam().getConfig().getString("testkey");
@@ -131,7 +139,7 @@ SCAN_URL="${BASE_URL%/}"
 
 zap-baseline.py \
     -t "$SCAN_URL" \
-    -z "-config testkey=$AUTH_TOKEN -script /zap/wrk/add-test-key.js" \
+    -z "-config testkey=$AUTH_TOKEN -script $WORK_DIR/add-test-key.js" \
     -J "$REPORT_DIR/backend-employee-zap.json" \
     -r "$REPORT_DIR/backend-employee-zap.html" \
     -w "$REPORT_DIR/backend-employee-zap.md" \
@@ -164,12 +172,13 @@ if [ ! -f "$REPORT_DIR/backend-employee-zap.json" ]; then
 fi
 
 # Parse results with Python
-python3 << 'PYCODE'
+export REPORT_DIR
+python3 << PYCODE
 import json
 import sys
 import os
 
-report_file = "/zap/wrk/reports/backend-employee-zap.json"
+report_file = os.path.join(os.environ.get('REPORT_DIR', '/zap/wrk/reports'), 'backend-employee-zap.json')
 
 try:
     with open(report_file, "r") as f:
@@ -282,7 +291,8 @@ try:
                 "count": len(a.get("instances", []))
             })
     
-    with open("/zap/wrk/reports/summary.json", "w") as f:
+    summary_file = os.path.join(os.environ.get('REPORT_DIR', '/zap/wrk/reports'), 'summary.json')
+    with open(summary_file, "w") as f:
         json.dump(summary, f)
     
     # Exit with error if high-risk vulnerabilities found

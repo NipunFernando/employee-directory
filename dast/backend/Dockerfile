@@ -19,6 +19,9 @@ RUN chmod +x /usr/local/bin/dast-scan.sh
 # Ensure script has proper line endings
 RUN sed -i 's/\r$//' /usr/local/bin/dast-scan.sh || true
 
+# Create writable directory for reports and scripts
+RUN mkdir -p /zap/wrk/reports && chown -R 10001:10001 /zap/wrk
+
 # Switch back to non-root user
 USER 10001
 
