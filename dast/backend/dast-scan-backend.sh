@@ -78,6 +78,11 @@ WORK_DIR="/tmp/dast-$$"
 mkdir -p "$WORK_DIR"
 cd "$WORK_DIR"
 
+# Set ZAP_HOME and HOME to writable directories
+export ZAP_HOME="$WORK_DIR/.zap"
+export HOME="$WORK_DIR"
+mkdir -p "$ZAP_HOME"
+
 # Cleanup function
 cleanup() {
     echo ""
@@ -94,6 +99,7 @@ trap cleanup EXIT
 
 # Start ZAP daemon
 echo "Starting ZAP..."
+echo "ZAP_HOME: $ZAP_HOME"
 ZAP_PORT=8090
 zap.sh -daemon -port $ZAP_PORT \
     -config api.disablekey=true \
