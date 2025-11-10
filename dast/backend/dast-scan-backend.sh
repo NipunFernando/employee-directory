@@ -74,18 +74,27 @@ zap.sh -daemon -port 8090 \
     > "$WORK_DIR/zap-startup.log" 2>&1 &
 ZAP_PID=$!
 
-# Wait for ZAP to be ready
-echo "Waiting for ZAP to start (30 seconds)..."
-for i in {1..6}; do
+# Wait for ZAP to be ready (ZAP needs time to load all extensions)
+echo "Waiting for ZAP to start (up to 60 seconds)..."
+for i in {1..12}; do
     sleep 5
-    if curl -s "http://localhost:8090/JSON/core/view/version/" > /dev/null 2>&1; then
-        ZAP_VERSION=$(curl -s "http://localhost:8090/JSON/core/view/version/" | jq -r '.version' 2>/dev/null || echo "unknown")
+    # Check if API is responding and try to get version
+    API_RESPONSE=$(curl -s "http://localhost:8090/JSON/core/view/version/" 2>/dev/null || echo "")
+    if [ -n "$API_RESPONSE" ] && echo "$API_RESPONSE" | jq -e '.version' > /dev/null 2>&1; then
+        ZAP_VERSION=$(echo "$API_RESPONSE" | jq -r '.version' 2>/dev/null || echo "unknown")
         echo "✅ ZAP started (version: $ZAP_VERSION)"
         break
     fi
-    if [ $i -eq 6 ]; then
-        echo "❌ ZAP failed to start"
-        cat "$WORK_DIR/zap-startup.log" 2>/dev/null || true
+    echo "  Waiting... ($((i * 5)) seconds)"
+    
+    if [ $i -eq 12 ]; then
+        echo "❌ ZAP failed to start after 60 seconds"
+        echo ""
+        echo "Last 30 lines of ZAP startup log:"
+        tail -30 "$WORK_DIR/zap-startup.log" 2>/dev/null || echo "No startup log found"
+        echo ""
+        echo "Checking if ZAP process is running..."
+        ps aux | grep -i zap | grep -v grep || echo "No ZAP process found"
         exit 1
     fi
 done
