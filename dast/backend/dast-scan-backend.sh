@@ -81,7 +81,14 @@ cd "$WORK_DIR"
 # Set ZAP_HOME and HOME to writable directories
 export ZAP_HOME="$WORK_DIR/.zap"
 export HOME="$WORK_DIR"
+# Create ZAP home directory structure
 mkdir -p "$ZAP_HOME"
+# Create .ZAP subdirectory that ZAP expects
+mkdir -p "$ZAP_HOME/.ZAP"
+# Ensure ZAP directory has proper permissions
+chmod -R 755 "$ZAP_HOME" 2>/dev/null || true
+echo "ZAP_HOME directory created: $ZAP_HOME"
+ls -la "$ZAP_HOME" 2>/dev/null || true
 
 # Cleanup function
 cleanup() {
