@@ -2,7 +2,7 @@
 FROM ghcr.io/zaproxy/zaproxy:stable
 
 # Install additional tools
-USER root
+USER 10001
 RUN apk add --no-cache \
     bash \
     curl \
