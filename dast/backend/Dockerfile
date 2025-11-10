@@ -2,11 +2,12 @@
 FROM ghcr.io/zaproxy/zaproxy:stable
 
 
-RUN apk add --no-cache \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
     curl \
     jq \
-    python3
+    python3 \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy scanning script
 # Note: Build context should be set to dast/backend directory in Choreo
