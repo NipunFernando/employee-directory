@@ -7,70 +7,39 @@ echo "=========================================="
 echo "Scan started: $(date)"
 echo ""
 
-# Configuration from environment variables
-BACKEND_URL="${GO_BACKEND_URL}"
-TEST_KEY="${GO_BACKEND_TOKEN}"
+# Configuration
+URL="${GO_BACKEND_URL}"
+KEY="${GO_BACKEND_TOKEN}"
 SLACK_WEBHOOK="${SLACK_WEBHOOK_URL}"
 SCAN_TIMEOUT="${SCAN_TIMEOUT_MINUTES:-10}"
 
-# Validate required variables
-if [ -z "$BACKEND_URL" ]; then
-    echo "ERROR: GO_BACKEND_URL is required"
-    echo "Example: https://[uuid]-dev.e1-us-east-azure.choreoapis.dev/[org]/[service]/v1.0"
-    exit 1
-fi
-
-if [ -z "$TEST_KEY" ]; then
-    echo "ERROR: GO_BACKEND_TOKEN is required"
+# Validate
+if [ -z "$URL" ] || [ -z "$KEY" ]; then
+    echo "ERROR: Missing GO_BACKEND_URL or GO_BACKEND_TOKEN"
     exit 1
 fi
 
 echo "Configuration:"
-echo "  Target URL: $BACKEND_URL"
+echo "  Target URL: $URL"
 echo "  Timeout: $SCAN_TIMEOUT minutes"
 echo ""
 
-# Determine API endpoint to test
-# Try multiple possible paths
-API_ENDPOINTS=(
-    "${BACKEND_URL%/}/employees"
-    "${BACKEND_URL%/}/api/employees"
-    "${BACKEND_URL%/}"
-)
-
 # Check backend accessibility
 echo "Checking backend accessibility..."
-BACKEND_ACCESSIBLE=false
-
-for ENDPOINT in "${API_ENDPOINTS[@]}"; do
-    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-        -H "Test-Key: $TEST_KEY" \
-        -H "accept: */*" \
-        "$ENDPOINT" 2>/dev/null || echo "000")
-    
-    if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "401" ]; then
-        echo "✅ Backend accessible at: $ENDPOINT (HTTP $HTTP_CODE)"
-        BACKEND_ACCESSIBLE=true
-        break
-    fi
-done
-
-if [ "$BACKEND_ACCESSIBLE" = false ]; then
-    echo "❌ Backend not accessible. Tried:"
-    for ENDPOINT in "${API_ENDPOINTS[@]}"; do
-        echo "  - $ENDPOINT"
-    done
+if ! curl -sf -H "Test-Key: $KEY" -H "accept: */*" "$URL/employees" > /dev/null 2>&1; then
+    echo "❌ Backend not accessible"
     
     if [ -n "$SLACK_WEBHOOK" ]; then
         curl -s -X POST "$SLACK_WEBHOOK" \
             -H 'Content-Type: application/json' \
-            -d "{\"text\":\":warning: *DAST Backend Employee Directory* - Backend not accessible. Scan aborted.\"}" \
+            -d '{"text":":warning: *DAST Backend Employee Directory* - Backend not accessible. Scan aborted."}' \
             > /dev/null 2>&1 || true
     fi
     
     exit 1
 fi
 
+echo "✅ Backend accessible"
 echo ""
 
 # Setup work directory
@@ -78,24 +47,12 @@ WORK_DIR="/tmp/dast-$$"
 mkdir -p "$WORK_DIR"
 cd "$WORK_DIR"
 
-# Set ZAP_HOME and HOME to writable directories
-export ZAP_HOME="$WORK_DIR/.zap"
-export HOME="$WORK_DIR"
-# Create ZAP home directory structure
-mkdir -p "$ZAP_HOME"
-# Create .ZAP subdirectory that ZAP expects
-mkdir -p "$ZAP_HOME/.ZAP"
-# Ensure ZAP directory has proper permissions
-chmod -R 755 "$ZAP_HOME" 2>/dev/null || true
-echo "ZAP_HOME directory created: $ZAP_HOME"
-ls -la "$ZAP_HOME" 2>/dev/null || true
-
 # Cleanup function
 cleanup() {
     echo ""
     echo "Cleaning up..."
     if [ -n "$ZAP_PID" ]; then
-        curl -s "http://localhost:$ZAP_PORT/JSON/core/action/shutdown/" > /dev/null 2>&1 || true
+        curl -s "http://localhost:8090/JSON/core/action/shutdown/" > /dev/null 2>&1 || true
         kill $ZAP_PID 2>/dev/null || true
         sleep 2
         kill -9 $ZAP_PID 2>/dev/null || true
@@ -106,71 +63,59 @@ trap cleanup EXIT
 
 # Start ZAP daemon
 echo "Starting ZAP..."
-echo "ZAP_HOME: $ZAP_HOME"
-ZAP_PORT=8090
-zap.sh -daemon -port $ZAP_PORT \
+export ZAP_HOME="$WORK_DIR/.zap"
+export HOME="$WORK_DIR"
+mkdir -p "$ZAP_HOME"
+
+zap.sh -daemon -port 8090 \
     -dir "$ZAP_HOME" \
     -config api.disablekey=true \
     -config database.recoverylog=false \
     > "$WORK_DIR/zap-startup.log" 2>&1 &
 ZAP_PID=$!
 
-# Wait for ZAP to be ready (max 60 seconds)
-echo "Waiting for ZAP to start..."
-for i in {1..12}; do
+# Wait for ZAP to be ready
+echo "Waiting for ZAP to start (30 seconds)..."
+for i in {1..6}; do
     sleep 5
-    if curl -s "http://localhost:$ZAP_PORT/JSON/core/view/version/" > /dev/null 2>&1; then
-        ZAP_VERSION=$(curl -s "http://localhost:$ZAP_PORT/JSON/core/view/version/" | jq -r '.version' 2>/dev/null || echo "unknown")
+    if curl -s "http://localhost:8090/JSON/core/view/version/" > /dev/null 2>&1; then
+        ZAP_VERSION=$(curl -s "http://localhost:8090/JSON/core/view/version/" | jq -r '.version' 2>/dev/null || echo "unknown")
         echo "✅ ZAP started (version: $ZAP_VERSION)"
         break
     fi
-    if [ $i -eq 12 ]; then
-        echo "❌ ZAP failed to start after 60 seconds"
-        echo ""
-        echo "ZAP startup log:"
-        cat "$WORK_DIR/zap-startup.log" 2>/dev/null || echo "No startup log found"
-        echo ""
-        echo "Checking if ZAP process is running..."
-        ps aux | grep -i zap | grep -v grep || echo "No ZAP process found"
+    if [ $i -eq 6 ]; then
+        echo "❌ ZAP failed to start"
+        cat "$WORK_DIR/zap-startup.log" 2>/dev/null || true
         exit 1
     fi
 done
 
 echo ""
 
-# Configure authentication header using Replacer add-on
-echo "Configuring authentication (Test-Key header)..."
-REPLACER_RESPONSE=$(curl -s "http://localhost:$ZAP_PORT/JSON/replacer/action/addRule/" \
-    --data-urlencode "description=Add Test-Key Authentication" \
+# Configure authentication
+echo "Configuring authentication..."
+curl -s "http://localhost:8090/JSON/replacer/action/addRule/" \
+    --data-urlencode "description=Add Test-Key" \
     --data-urlencode "enabled=true" \
     --data-urlencode "matchType=REQ_HEADER" \
     --data-urlencode "matchString=Test-Key" \
-    --data-urlencode "regex=false" \
-    --data-urlencode "replacement=$TEST_KEY")
-
-if echo "$REPLACER_RESPONSE" | jq -e '.Result' > /dev/null 2>&1; then
-    echo "✅ Authentication configured"
-else
-    echo "⚠️  Warning: Authentication configuration may have failed"
-    echo "Response: $REPLACER_RESPONSE"
-fi
-
+    --data-urlencode "replacement=$KEY" \
+    > /dev/null
+echo "✅ Authentication configured"
 echo ""
 
 # Spider the target
 echo "=========================================="
 echo "Spidering target..."
 echo "=========================================="
-SPIDER_RESPONSE=$(curl -s "http://localhost:$ZAP_PORT/JSON/spider/action/scan/" \
-    --data-urlencode "url=$BACKEND_URL" \
+SPIDER_ID=$(curl -s "http://localhost:8090/JSON/spider/action/scan/" \
+    --data-urlencode "url=$URL" \
     --data-urlencode "maxChildren=50" \
-    --data-urlencode "recurse=true")
-
-SPIDER_ID=$(echo "$SPIDER_RESPONSE" | jq -r '.scan' 2>/dev/null || echo "")
+    --data-urlencode "recurse=true" \
+    | jq -r '.scan')
 
 if [ -z "$SPIDER_ID" ] || [ "$SPIDER_ID" = "null" ]; then
     echo "❌ Failed to start spider"
-    echo "Response: $SPIDER_RESPONSE"
     exit 1
 fi
 
@@ -180,25 +125,22 @@ echo "Spider ID: $SPIDER_ID"
 SPIDER_TIMEOUT=36
 for i in $(seq 1 $SPIDER_TIMEOUT); do
     sleep 5
-    STATUS_RESPONSE=$(curl -s "http://localhost:$ZAP_PORT/JSON/spider/view/status/?scanId=$SPIDER_ID")
-    STATUS=$(echo "$STATUS_RESPONSE" | jq -r '.status' 2>/dev/null || echo "0")
+    STATUS=$(curl -s "http://localhost:8090/JSON/spider/view/status/?scanId=$SPIDER_ID" | jq -r '.status' 2>/dev/null || echo "0")
     
     if [ "$STATUS" != "null" ] && [ -n "$STATUS" ]; then
         echo "Spider progress: ${STATUS}%"
-        
         if [ "$STATUS" = "100" ]; then
             break
         fi
     fi
     
     if [ $i -eq $SPIDER_TIMEOUT ]; then
-        echo "⚠️  Spider timeout reached, continuing with scan..."
+        echo "⚠️  Spider timeout reached, continuing..."
         break
     fi
 done
 
-# Get spider results
-URLS_FOUND=$(curl -s "http://localhost:$ZAP_PORT/JSON/spider/view/results/?scanId=$SPIDER_ID" | jq -r '.results | length' 2>/dev/null || echo "0")
+URLS_FOUND=$(curl -s "http://localhost:8090/JSON/spider/view/results/?scanId=$SPIDER_ID" | jq -r '.results | length' 2>/dev/null || echo "0")
 echo "✅ Spider complete - Found $URLS_FOUND URLs"
 echo ""
 
@@ -206,16 +148,14 @@ echo ""
 echo "=========================================="
 echo "Starting security scan..."
 echo "=========================================="
-SCAN_RESPONSE=$(curl -s "http://localhost:$ZAP_PORT/JSON/ascan/action/scan/" \
-    --data-urlencode "url=$BACKEND_URL" \
+SCAN_ID=$(curl -s "http://localhost:8090/JSON/ascan/action/scan/" \
+    --data-urlencode "url=$URL" \
     --data-urlencode "recurse=true" \
-    --data-urlencode "inScopeOnly=false")
-
-SCAN_ID=$(echo "$SCAN_RESPONSE" | jq -r '.scan' 2>/dev/null || echo "")
+    --data-urlencode "inScopeOnly=false" \
+    | jq -r '.scan')
 
 if [ -z "$SCAN_ID" ] || [ "$SCAN_ID" = "null" ]; then
     echo "❌ Failed to start active scan"
-    echo "Response: $SCAN_RESPONSE"
     exit 1
 fi
 
@@ -223,19 +163,17 @@ echo "Scan ID: $SCAN_ID"
 
 # Wait for scan to complete (based on timeout)
 SCAN_TIMEOUT_SECONDS=$((SCAN_TIMEOUT * 60))
-SCAN_TIMEOUT_ITERATIONS=$((SCAN_TIMEOUT_SECONDS / 5))
-if [ $SCAN_TIMEOUT_ITERATIONS -gt 120 ]; then
-    SCAN_TIMEOUT_ITERATIONS=120  # Max 10 minutes
+SCAN_TIMEOUT_ITERATIONS=$((SCAN_TIMEOUT_SECONDS / 10))
+if [ $SCAN_TIMEOUT_ITERATIONS -gt 60 ]; then
+    SCAN_TIMEOUT_ITERATIONS=60  # Max 10 minutes
 fi
 
 for i in $(seq 1 $SCAN_TIMEOUT_ITERATIONS); do
-    sleep 5
-    STATUS_RESPONSE=$(curl -s "http://localhost:$ZAP_PORT/JSON/ascan/view/status/?scanId=$SCAN_ID")
-    STATUS=$(echo "$STATUS_RESPONSE" | jq -r '.status' 2>/dev/null || echo "0")
+    sleep 10
+    STATUS=$(curl -s "http://localhost:8090/JSON/ascan/view/status/?scanId=$SCAN_ID" | jq -r '.status' 2>/dev/null || echo "0")
     
     if [ "$STATUS" != "null" ] && [ -n "$STATUS" ]; then
         echo "Scan progress: ${STATUS}%"
-        
         if [ "$STATUS" = "100" ]; then
             break
         fi
@@ -250,11 +188,11 @@ done
 echo "✅ Scan complete"
 echo ""
 
-# Get scan results
+# Get results
 echo "=========================================="
 echo "Fetching scan results..."
 echo "=========================================="
-curl -s "http://localhost:$ZAP_PORT/JSON/alert/view/alerts/?baseurl=$BACKEND_URL" > "$WORK_DIR/alerts.json"
+curl -s "http://localhost:8090/JSON/alert/view/alerts/?baseurl=$(echo $URL | sed 's/[\/&]/\\&/g')" > "$WORK_DIR/alerts.json"
 
 # Parse and display results
 echo ""
@@ -395,17 +333,17 @@ if [ -n "$SLACK_WEBHOOK" ] && [ -f "$WORK_DIR/summary.json" ]; then
         # Get high vulnerability names
         HIGH_DETAILS=$(echo "$SUMMARY" | jq -r '.high_details[] | "  • \(.name) (\(.count) instance\(if .count > 1 then "s" else "" end))"' | head -n 3)
         
-        MESSAGE="$EMOJI *DAST - Backend Employee Directory*\n\n*Status:* $STATUS\n*Scan Date:* $(date '+%Y-%m-%d %H:%M:%S')\n\n*Results:*\n  Total: $TOTAL\n  :red_circle: High: $HIGH\n  :large_orange_diamond: Medium: $MEDIUM\n  :white_circle: Low: $LOW\n\n*High Risk Issues:*\n$HIGH_DETAILS\n\n*Target:* Backend Employee API\n*URL:* \`$BACKEND_URL\`\n*Action Required:* Review and fix high-risk vulnerabilities"
+        MESSAGE="$EMOJI *DAST - Backend Employee Directory*\n\n*Status:* $STATUS\n*Scan Date:* $(date '+%Y-%m-%d %H:%M:%S')\n\n*Results:*\n  Total: $TOTAL\n  :red_circle: High: $HIGH\n  :large_orange_diamond: Medium: $MEDIUM\n  :white_circle: Low: $LOW\n\n*High Risk Issues:*\n$HIGH_DETAILS\n\n*Target:* Backend Employee API\n*URL:* \`$URL\`\n*Action Required:* Review and fix high-risk vulnerabilities"
     elif [ "$MEDIUM" -gt 5 ]; then
         EMOJI=":warning:"
         STATUS="WARNING - Multiple Medium Risk Issues"
         
-        MESSAGE="$EMOJI *DAST - Backend Employee Directory*\n\n*Status:* $STATUS\n*Scan Date:* $(date '+%Y-%m-%d %H:%M:%S')\n\n*Results:*\n  Total: $TOTAL\n  :white_circle: High: $HIGH\n  :large_orange_diamond: Medium: $MEDIUM\n  :white_circle: Low: $LOW\n\n*Target:* Backend Employee API\n*URL:* \`$BACKEND_URL\`\n*Recommendation:* Review medium-risk findings"
+        MESSAGE="$EMOJI *DAST - Backend Employee Directory*\n\n*Status:* $STATUS\n*Scan Date:* $(date '+%Y-%m-%d %H:%M:%S')\n\n*Results:*\n  Total: $TOTAL\n  :white_circle: High: $HIGH\n  :large_orange_diamond: Medium: $MEDIUM\n  :white_circle: Low: $LOW\n\n*Target:* Backend Employee API\n*URL:* \`$URL\`\n*Recommendation:* Review medium-risk findings"
     else
         EMOJI=":shield:"
         STATUS="PASSED"
         
-        MESSAGE="$EMOJI *DAST - Backend Employee Directory*\n\n*Status:* $STATUS\n*Scan Date:* $(date '+%Y-%m-%d %H:%M:%S')\n\n*Results:*\n  Total: $TOTAL\n  :white_check_mark: High: $HIGH\n  :white_circle: Medium: $MEDIUM\n  :white_circle: Low: $LOW\n\n*Target:* Backend Employee API\n*URL:* \`$BACKEND_URL\`\n*Security Status:* No high-risk vulnerabilities detected"
+        MESSAGE="$EMOJI *DAST - Backend Employee Directory*\n\n*Status:* $STATUS\n*Scan Date:* $(date '+%Y-%m-%d %H:%M:%S')\n\n*Results:*\n  Total: $TOTAL\n  :white_check_mark: High: $HIGH\n  :white_circle: Medium: $MEDIUM\n  :white_circle: Low: $LOW\n\n*Target:* Backend Employee API\n*URL:* \`$URL\`\n*Security Status:* No high-risk vulnerabilities detected"
     fi
     
     curl -s -X POST "$SLACK_WEBHOOK" \
