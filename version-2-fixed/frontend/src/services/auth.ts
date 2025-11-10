@@ -47,6 +47,13 @@ export const getUserInfo = async (): Promise<UserInfo | null> => {
       return null;
     }
     
+    // FIXED: Check Content-Type before parsing JSON to avoid errors
+    const contentType = response.headers.get('content-type');
+    if (!contentType || !contentType.includes('application/json')) {
+      // Response is not JSON (might be HTML error page) - return null silently
+      return null;
+    }
+    
     // FIXED: Try to parse JSON, catch errors gracefully (handles HTML responses)
     try {
       const userInfo = await response.json();
@@ -57,8 +64,15 @@ export const getUserInfo = async (): Promise<UserInfo | null> => {
       return null;
     }
   } catch (error) {
-    // FIXED: Better error handling - log but don't throw
-    console.error('Error fetching user info:', error);
+    // FIXED: Only log network/fetch errors, not JSON parse errors
+    // JSON parse errors (SyntaxError) are handled in the inner try-catch above
+    // Only log actual network/fetch errors
+    if (error instanceof TypeError && error.message.includes('fetch')) {
+      console.error('Error fetching user info:', error);
+    } else if (!(error instanceof SyntaxError)) {
+      // Don't log SyntaxError (JSON parse errors) - those are expected for HTML responses
+      console.error('Error fetching user info:', error);
+    }
     return null;
   }
 };
