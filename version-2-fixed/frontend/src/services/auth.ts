@@ -33,26 +33,54 @@ export const getUserInfoFromCookie = (): UserInfo | null => {
 // FIXED: Use text() first to check content before parsing JSON to avoid SyntaxError
 export const getUserInfo = async (): Promise<UserInfo | null> => {
   try {
+    console.log('[DEBUG] Fetching /auth/userinfo...');
     const response = await fetch('/auth/userinfo', {
       credentials: 'include', // Include cookies
+      redirect: 'manual', // FIXED: Handle redirects manually to prevent loops
     });
     
+    console.log('[DEBUG] Response status:', response.status, 'ok:', response.ok);
+    console.log('[DEBUG] Response headers:', {
+      'content-type': response.headers.get('content-type'),
+      'location': response.headers.get('location'),
+    });
+    
+    // Handle redirect responses (3xx)
+    if (response.status >= 300 && response.status < 400) {
+      console.log('[DEBUG] Redirect response detected, returning null');
+      // Redirect response - user likely needs to authenticate
+      return null;
+    }
+    
     if (response.status === 401) {
+      console.log('[DEBUG] 401 Unauthorized, returning null');
       // User is not authenticated
       return null;
     }
     
     if (!response.ok) {
+      console.log('[DEBUG] Response not ok, returning null');
       // FIXED: Return null for non-ok responses instead of throwing
       return null;
     }
     
     // FIXED: Read as text first to check if it's JSON before parsing
     // This prevents SyntaxError when HTML is returned
-    const text = await response.text();
+    let text: string;
+    try {
+      text = await response.text();
+      console.log('[DEBUG] Response text length:', text.length);
+      console.log('[DEBUG] Response text preview (first 200 chars):', text.substring(0, 200));
+    } catch (textError) {
+      console.log('[DEBUG] Error reading response text:', textError);
+      // If we can't read the text, return null silently
+      return null;
+    }
     
     // Check if response is HTML (common error page indicator)
-    if (text.trim().toLowerCase().startsWith('<!doctype') || text.trim().startsWith('<')) {
+    const trimmedText = text.trim();
+    if (trimmedText.toLowerCase().startsWith('<!doctype') || trimmedText.startsWith('<')) {
+      console.log('[DEBUG] Response is HTML, returning null');
       // Response is HTML, not JSON - return null silently
       return null;
     }
@@ -60,18 +88,26 @@ export const getUserInfo = async (): Promise<UserInfo | null> => {
     // Try to parse as JSON
     try {
       const userInfo = JSON.parse(text);
+      console.log('[DEBUG] Successfully parsed JSON, userInfo:', userInfo);
       return userInfo;
     } catch (parseError) {
-      // Response was not valid JSON - return null silently
+      console.log('[DEBUG] Failed to parse as JSON:', parseError);
+      // Response was not valid JSON - return null silently (don't log)
       return null;
     }
   } catch (error) {
     // FIXED: Only log network/fetch errors, not JSON parse errors
-    // JSON parse errors are handled above by checking text content first
+    // JSON parse errors (SyntaxError) are handled above and should never reach here
+    // Only log actual network/fetch errors
+    console.log('[DEBUG] Outer catch block, error type:', error?.constructor?.name, error);
+    if (error instanceof SyntaxError) {
+      // SyntaxError should be caught by inner try-catch, but if it somehow reaches here, don't log
+      return null;
+    }
     if (error instanceof TypeError && error.message.includes('fetch')) {
       console.error('Error fetching user info:', error);
-    } else if (!(error instanceof SyntaxError)) {
-      // Don't log SyntaxError - those are handled by text() approach above
+    } else {
+      // Log other errors (but not SyntaxError)
       console.error('Error fetching user info:', error);
     }
     return null;

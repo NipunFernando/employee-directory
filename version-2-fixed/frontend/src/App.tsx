@@ -25,22 +25,28 @@ function App() {
   // Check authentication and get user info
   useEffect(() => {
     const checkAuth = async () => {
+      console.log('[DEBUG App] Starting authentication check...');
       try {
         // First, check for userinfo cookie (set immediately after login)
         const cookieUserInfo = getUserInfoFromCookie();
+        console.log('[DEBUG App] Cookie userInfo:', cookieUserInfo ? 'found' : 'not found');
         if (cookieUserInfo) {
+          console.log('[DEBUG App] Using cookie userInfo, setting user and stopping loading');
           setUserInfo(cookieUserInfo);
           setIsLoading(false);
           return;
         }
 
         // Otherwise, check /auth/userinfo endpoint
+        console.log('[DEBUG App] No cookie, fetching from /auth/userinfo...');
         const user = await getUserInfo();
+        console.log('[DEBUG App] getUserInfo returned:', user ? 'user found' : 'null');
         setUserInfo(user);
       } catch (err) {
-        console.error('Error checking authentication:', err);
+        console.error('[DEBUG App] Error checking authentication:', err);
         setError('Failed to check authentication status');
       } finally {
+        console.log('[DEBUG App] Setting isLoading to false');
         setIsLoading(false);
       }
     };
