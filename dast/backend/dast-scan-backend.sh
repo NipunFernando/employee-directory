@@ -52,12 +52,20 @@ cleanup() {
     echo ""
     echo "Cleaning up..."
     if [ -n "$ZAP_PID" ]; then
-        curl -s "http://localhost:8090/JSON/core/action/shutdown/" > /dev/null 2>&1 || true
+        # Try graceful shutdown with timeout
+        timeout 5 curl -s "http://localhost:8090/JSON/core/action/shutdown/" > /dev/null 2>&1 || true
+        # Give it a moment, then kill
+        sleep 1
         kill $ZAP_PID 2>/dev/null || true
-        sleep 2
-        kill -9 $ZAP_PID 2>/dev/null || true
+        sleep 1
+        # Force kill if still running
+        if kill -0 $ZAP_PID 2>/dev/null; then
+            kill -9 $ZAP_PID 2>/dev/null || true
+        fi
     fi
+    # Clean up work directory (non-blocking)
     rm -rf "$WORK_DIR" 2>/dev/null || true
+    echo "Cleanup complete"
 }
 trap cleanup EXIT
 
