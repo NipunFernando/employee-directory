@@ -2,355 +2,251 @@
 set -e
 
 echo "=========================================="
-echo "DAST - Backend Employee Directory Scanner"
+echo "DAST - Backend Employee Directory"
 echo "=========================================="
-echo "Scan started: $(date)"
+echo "Started: $(date)"
 echo ""
 
-# Configuration
-URL="${GO_BACKEND_URL}"
-KEY="${GO_BACKEND_TOKEN}"
+# Config
+BACKEND_URL="${GO_BACKEND_URL}"
+TEST_KEY="${GO_BACKEND_TOKEN}"
 SLACK_WEBHOOK="${SLACK_WEBHOOK_URL}"
-SCAN_TIMEOUT="${SCAN_TIMEOUT_MINUTES:-10}"
 
 # Validate
-if [ -z "$URL" ] || [ -z "$KEY" ]; then
+if [ -z "$BACKEND_URL" ] || [ -z "$TEST_KEY" ]; then
     echo "ERROR: Missing GO_BACKEND_URL or GO_BACKEND_TOKEN"
     exit 1
 fi
 
-echo "Configuration:"
-echo "  Target URL: $URL"
-echo "  Timeout: $SCAN_TIMEOUT minutes"
+echo "Target: $BACKEND_URL"
 echo ""
 
-# Check backend accessibility
-echo "Checking backend accessibility..."
-if ! curl -sf -H "Test-Key: $KEY" -H "accept: */*" "$URL/employees" > /dev/null 2>&1; then
-    echo "❌ Backend not accessible"
-    
-    if [ -n "$SLACK_WEBHOOK" ]; then
-        curl -s -X POST "$SLACK_WEBHOOK" \
-            -H 'Content-Type: application/json' \
-            -d '{"text":":warning: *DAST Backend Employee Directory* - Backend not accessible. Scan aborted."}' \
-            > /dev/null 2>&1 || true
-    fi
-    
+# Check backend
+echo "Checking backend..."
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+    -H "Test-Key: $TEST_KEY" \
+    "$BACKEND_URL/employees" 2>/dev/null || echo "000")
+
+if [ "$HTTP_CODE" != "200" ]; then
+    echo "❌ Backend not accessible (HTTP $HTTP_CODE)"
     exit 1
 fi
 
 echo "✅ Backend accessible"
 echo ""
 
-# Setup work directory
-WORK_DIR="/tmp/dast-$$"
-mkdir -p "$WORK_DIR"
-cd "$WORK_DIR"
-
-# Cleanup function
-cleanup() {
-    echo ""
-    echo "Cleaning up..."
-    if [ -n "$ZAP_PID" ]; then
-        curl -s "http://localhost:8090/JSON/core/action/shutdown/" > /dev/null 2>&1 || true
-        kill $ZAP_PID 2>/dev/null || true
-        sleep 2
-        kill -9 $ZAP_PID 2>/dev/null || true
-    fi
-    rm -rf "$WORK_DIR" 2>/dev/null || true
-}
-trap cleanup EXIT
-
-# Start ZAP daemon
+# Start ZAP
 echo "Starting ZAP..."
-export ZAP_HOME="$WORK_DIR/.zap"
-export HOME="$WORK_DIR"
-mkdir -p "$ZAP_HOME"
+ZAP_PORT=8090
 
-zap.sh -daemon -port 8090 \
-    -dir "$ZAP_HOME" \
+zap.sh \
+    -daemon \
+    -port $ZAP_PORT \
+    -host 0.0.0.0 \
     -config api.disablekey=true \
-    -config database.recoverylog=false \
-    > "$WORK_DIR/zap-startup.log" 2>&1 &
+    > /dev/null 2>&1 &
+
 ZAP_PID=$!
 
-# Wait for ZAP to be ready
-echo "Waiting for ZAP to start (30 seconds)..."
-for i in {1..6}; do
-    sleep 5
-    if curl -s "http://localhost:8090/JSON/core/view/version/" > /dev/null 2>&1; then
-        ZAP_VERSION=$(curl -s "http://localhost:8090/JSON/core/view/version/" | jq -r '.version' 2>/dev/null || echo "unknown")
-        echo "✅ ZAP started (version: $ZAP_VERSION)"
-        break
-    fi
-    if [ $i -eq 6 ]; then
-        echo "❌ ZAP failed to start"
-        cat "$WORK_DIR/zap-startup.log" 2>/dev/null || true
-        exit 1
-    fi
-done
+# Wait for ZAP
+echo "Waiting for ZAP (30 seconds)..."
+sleep 30
 
+if ! curl -s http://localhost:$ZAP_PORT/JSON/core/view/version/ > /dev/null 2>&1; then
+    echo "❌ ZAP failed to start"
+    kill $ZAP_PID 2>/dev/null || true
+    exit 1
+fi
+
+ZAP_VERSION=$(curl -s http://localhost:$ZAP_PORT/JSON/core/view/version/ | jq -r '.version' 2>/dev/null || echo "unknown")
+echo "✅ ZAP started (version: $ZAP_VERSION)"
 echo ""
 
 # Configure authentication
 echo "Configuring authentication..."
-curl -s "http://localhost:8090/JSON/replacer/action/addRule/" \
+curl -s "http://localhost:$ZAP_PORT/JSON/replacer/action/addRule/" \
     --data-urlencode "description=Add Test-Key" \
     --data-urlencode "enabled=true" \
     --data-urlencode "matchType=REQ_HEADER" \
     --data-urlencode "matchString=Test-Key" \
-    --data-urlencode "replacement=$KEY" \
-    > /dev/null
+    --data-urlencode "replacement=$TEST_KEY" \
+    > /dev/null 2>&1
+
 echo "✅ Authentication configured"
 echo ""
 
-# Spider the target
+# Spider
 echo "=========================================="
 echo "Spidering target..."
 echo "=========================================="
-SPIDER_ID=$(curl -s "http://localhost:8090/JSON/spider/action/scan/" \
-    --data-urlencode "url=$URL" \
-    --data-urlencode "maxChildren=50" \
-    --data-urlencode "recurse=true" \
-    | jq -r '.scan')
 
-if [ -z "$SPIDER_ID" ] || [ "$SPIDER_ID" = "null" ]; then
-    echo "❌ Failed to start spider"
-    exit 1
-fi
+SPIDER_ID=$(curl -s "http://localhost:$ZAP_PORT/JSON/spider/action/scan/" \
+    --data-urlencode "url=$BACKEND_URL" \
+    --data-urlencode "maxChildren=20" \
+    | jq -r '.scan' 2>/dev/null || echo "0")
 
 echo "Spider ID: $SPIDER_ID"
 
-# Wait for spider to complete (max 3 minutes)
-SPIDER_TIMEOUT=36
-for i in $(seq 1 $SPIDER_TIMEOUT); do
-    sleep 5
-    STATUS=$(curl -s "http://localhost:8090/JSON/spider/view/status/?scanId=$SPIDER_ID" | jq -r '.status' 2>/dev/null || echo "0")
+# Wait for spider
+for i in {1..24}; do
+    STATUS=$(curl -s "http://localhost:$ZAP_PORT/JSON/spider/view/status/?scanId=$SPIDER_ID" \
+        | jq -r '.status' 2>/dev/null || echo "0")
     
-    if [ "$STATUS" != "null" ] && [ -n "$STATUS" ]; then
-        echo "Spider progress: ${STATUS}%"
-        if [ "$STATUS" = "100" ]; then
-            break
-        fi
-    fi
+    echo "Spider progress: $STATUS%"
     
-    if [ $i -eq $SPIDER_TIMEOUT ]; then
-        echo "⚠️  Spider timeout reached, continuing..."
+    if [ "$STATUS" = "100" ]; then
         break
     fi
+    
+    sleep 5
 done
 
-URLS_FOUND=$(curl -s "http://localhost:8090/JSON/spider/view/results/?scanId=$SPIDER_ID" | jq -r '.results | length' 2>/dev/null || echo "0")
-echo "✅ Spider complete - Found $URLS_FOUND URLs"
+URL_COUNT=$(curl -s "http://localhost:$ZAP_PORT/JSON/spider/view/fullResults/?scanId=$SPIDER_ID" \
+    | jq '.urlsInScope | length' 2>/dev/null || echo "0")
+
+echo "✅ Spider complete - Found $URL_COUNT URLs"
 echo ""
 
-# Active security scan
+# Active scan
 echo "=========================================="
 echo "Starting security scan..."
 echo "=========================================="
-SCAN_ID=$(curl -s "http://localhost:8090/JSON/ascan/action/scan/" \
-    --data-urlencode "url=$URL" \
-    --data-urlencode "recurse=true" \
-    --data-urlencode "inScopeOnly=false" \
-    | jq -r '.scan')
 
-if [ -z "$SCAN_ID" ] || [ "$SCAN_ID" = "null" ]; then
-    echo "❌ Failed to start active scan"
-    exit 1
-fi
+SCAN_ID=$(curl -s "http://localhost:$ZAP_PORT/JSON/ascan/action/scan/" \
+    --data-urlencode "url=$BACKEND_URL" \
+    --data-urlencode "recurse=true" \
+    | jq -r '.scan' 2>/dev/null || echo "0")
 
 echo "Scan ID: $SCAN_ID"
 
-# Wait for scan to complete (based on timeout)
-SCAN_TIMEOUT_SECONDS=$((SCAN_TIMEOUT * 60))
-SCAN_TIMEOUT_ITERATIONS=$((SCAN_TIMEOUT_SECONDS / 10))
-if [ $SCAN_TIMEOUT_ITERATIONS -gt 60 ]; then
-    SCAN_TIMEOUT_ITERATIONS=60  # Max 10 minutes
-fi
-
-for i in $(seq 1 $SCAN_TIMEOUT_ITERATIONS); do
-    sleep 10
-    STATUS=$(curl -s "http://localhost:8090/JSON/ascan/view/status/?scanId=$SCAN_ID" | jq -r '.status' 2>/dev/null || echo "0")
+# Wait for scan
+for i in {1..96}; do
+    STATUS=$(curl -s "http://localhost:$ZAP_PORT/JSON/ascan/view/status/?scanId=$SCAN_ID" \
+        | jq -r '.status' 2>/dev/null || echo "0")
     
-    if [ "$STATUS" != "null" ] && [ -n "$STATUS" ]; then
-        echo "Scan progress: ${STATUS}%"
-        if [ "$STATUS" = "100" ]; then
-            break
-        fi
+    if [ $((i % 4)) -eq 0 ]; then
+        echo "Scan progress: $STATUS%"
     fi
     
-    if [ $i -eq $SCAN_TIMEOUT_ITERATIONS ]; then
-        echo "⚠️  Scan timeout reached, fetching partial results..."
+    if [ "$STATUS" = "100" ]; then
         break
     fi
+    
+    sleep 5
 done
 
 echo "✅ Scan complete"
 echo ""
 
-# Get results
+# Get results - SAVE TO /tmp WITH FULL PATH
 echo "=========================================="
 echo "Fetching scan results..."
 echo "=========================================="
-curl -s "http://localhost:8090/JSON/alert/view/alerts/?baseurl=$(echo $URL | sed 's/[\/&]/\\&/g')" > "$WORK_DIR/alerts.json"
 
-# Parse and display results
+ALERTS_FILE="/tmp/alerts-$$.json"
+curl -s "http://localhost:$ZAP_PORT/JSON/alert/view/alerts/" > "$ALERTS_FILE"
+
+# Verify file was created
+if [ ! -f "$ALERTS_FILE" ]; then
+    echo "❌ Failed to fetch alerts"
+    kill $ZAP_PID 2>/dev/null || true
+    exit 1
+fi
+
 echo ""
+
+# Parse results - USE FULL PATH
 echo "=========================================="
 echo "SCAN RESULTS"
 echo "=========================================="
 
-python3 << 'PYCODE'
+python3 << PYCODE
 import json
 import sys
-import os
-
-alerts_file = os.path.join(os.environ.get('WORK_DIR', '/tmp'), 'alerts.json')
 
 try:
-    with open(alerts_file, 'r') as f:
+    with open("$ALERTS_FILE") as f:
         data = json.load(f)
-    
+
     alerts = data.get("alerts", [])
-    
-    # Count by risk level
+
     high = sum(1 for a in alerts if a.get("risk") == "High")
     medium = sum(1 for a in alerts if a.get("risk") == "Medium")
     low = sum(1 for a in alerts if a.get("risk") == "Low")
     info = sum(1 for a in alerts if a.get("risk") == "Informational")
-    
-    total = len(alerts)
-    
-    print(f"\nVulnerability Summary:")
-    print(f"  Total Alerts: {total}")
-    print(f"  🔴 High Risk:    {high}")
-    print(f"  🟠 Medium Risk:  {medium}")
-    print(f"  🟡 Low Risk:     {low}")
-    print(f"  ℹ️  Info:         {info}")
+
+    print(f"\nTotal Alerts: {len(alerts)}")
+    print(f"🔴 High:   {high}")
+    print(f"🟠 Medium: {medium}")
+    print(f"🟡 Low:    {low}")
+    print(f"ℹ️  Info:   {info}")
     print("")
-    
-    # Display high-risk vulnerabilities
+
     if high > 0:
         print("=" * 60)
         print("HIGH RISK VULNERABILITIES:")
         print("=" * 60)
         for a in alerts:
             if a.get("risk") == "High":
-                name = a.get("name", "Unknown")
-                desc = a.get("description", "No description")[:200]
-                instances = len(a.get("instances", []))
-                
-                print(f"\n[!] {name}")
-                print(f"    Description: {desc}...")
-                print(f"    Instances: {instances}")
+                print(f"\n  • {a.get('name')}")
+                desc = a.get('description', '')[:150]
+                print(f"    {desc}...")
         print("")
-    
-    # Display medium-risk vulnerabilities (top 5)
-    if medium > 0:
+
+    if medium > 0 and medium <= 10:
         print("=" * 60)
-        print("MEDIUM RISK VULNERABILITIES (top 5):")
+        print("MEDIUM RISK VULNERABILITIES:")
         print("=" * 60)
-        count = 0
         for a in alerts:
-            if a.get("risk") == "Medium" and count < 5:
-                name = a.get("name", "Unknown")
-                instances = len(a.get("instances", []))
-                print(f"  [{count+1}] {name} ({instances} instance{'s' if instances != 1 else ''})")
-                count += 1
-        if medium > 5:
-            print(f"  ... and {medium - 5} more")
+            if a.get("risk") == "Medium":
+                print(f"  • {a.get('name')}")
         print("")
-    
+
     # Save summary
-    summary = {
-        "total": total,
-        "high": high,
-        "medium": medium,
-        "low": low,
-        "info": info,
-        "high_details": []
-    }
-    
-    # Extract high vulnerability names for Slack
-    for a in alerts:
-        if a.get("risk") == "High":
-            summary["high_details"].append({
-                "name": a.get("name", "Unknown"),
-                "count": len(a.get("instances", []))
-            })
-    
-    summary_file = os.path.join(os.environ.get('WORK_DIR', '/tmp'), 'summary.json')
-    with open(summary_file, "w") as f:
-        json.dump(summary, f, indent=2)
-    
-    # Print summary for logs
-    print("=" * 60)
-    print("SUMMARY (for logs and Slack):")
-    print("=" * 60)
-    print(json.dumps(summary, indent=2))
-    print("=" * 60)
-    
-    # Exit with error if high-risk vulnerabilities found
+    summary = {"high": high, "medium": medium, "low": low, "info": info}
+    with open("/tmp/summary-$$.json", "w") as f:
+        json.dump(summary, f)
+
     sys.exit(1 if high > 0 else 0)
-    
+
 except Exception as e:
-    print(f"ERROR: Failed to parse results: {e}", file=sys.stderr)
+    print(f"ERROR: Failed to parse results: {e}")
     import traceback
     traceback.print_exc()
     sys.exit(2)
 PYCODE
 
-SCAN_EXIT_CODE=$?
+EXIT_CODE=$?
 
-# Display summary file
-echo ""
-echo "=========================================="
-echo "Summary File Content"
-echo "=========================================="
-if [ -f "$WORK_DIR/summary.json" ]; then
-    cat "$WORK_DIR/summary.json"
-    echo ""
-else
-    echo "WARNING: Summary file not generated"
-    echo ""
-fi
-
-# Send Slack notification
-if [ -n "$SLACK_WEBHOOK" ] && [ -f "$WORK_DIR/summary.json" ]; then
-    echo "Sending Slack notification..."
+# Slack notification
+SUMMARY_FILE="/tmp/summary-$$.json"
+if [ -n "$SLACK_WEBHOOK" ] && [ -f "$SUMMARY_FILE" ]; then
+    HIGH=$(jq -r '.high' "$SUMMARY_FILE" 2>/dev/null || echo "0")
+    MEDIUM=$(jq -r '.medium' "$SUMMARY_FILE" 2>/dev/null || echo "0")
+    LOW=$(jq -r '.low' "$SUMMARY_FILE" 2>/dev/null || echo "0")
     
-    SUMMARY=$(cat "$WORK_DIR/summary.json")
-    HIGH=$(echo "$SUMMARY" | jq -r '.high')
-    MEDIUM=$(echo "$SUMMARY" | jq -r '.medium')
-    LOW=$(echo "$SUMMARY" | jq -r '.low')
-    TOTAL=$(echo "$SUMMARY" | jq -r '.total')
-    
-    # Determine status and emoji
     if [ "$HIGH" -gt 0 ]; then
-        EMOJI=":rotating_light:"
-        STATUS="FAILED - High Risk Vulnerabilities Found"
-        
-        # Get high vulnerability names
-        HIGH_DETAILS=$(echo "$SUMMARY" | jq -r '.high_details[] | "  • \(.name) (\(.count) instance\(if .count > 1 then "s" else "" end))"' | head -n 3)
-        
-        MESSAGE="$EMOJI *DAST - Backend Employee Directory*\n\n*Status:* $STATUS\n*Scan Date:* $(date '+%Y-%m-%d %H:%M:%S')\n\n*Results:*\n  Total: $TOTAL\n  :red_circle: High: $HIGH\n  :large_orange_diamond: Medium: $MEDIUM\n  :white_circle: Low: $LOW\n\n*High Risk Issues:*\n$HIGH_DETAILS\n\n*Target:* Backend Employee API\n*URL:* \`$URL\`\n*Action Required:* Review and fix high-risk vulnerabilities"
-    elif [ "$MEDIUM" -gt 5 ]; then
-        EMOJI=":warning:"
-        STATUS="WARNING - Multiple Medium Risk Issues"
-        
-        MESSAGE="$EMOJI *DAST - Backend Employee Directory*\n\n*Status:* $STATUS\n*Scan Date:* $(date '+%Y-%m-%d %H:%M:%S')\n\n*Results:*\n  Total: $TOTAL\n  :white_circle: High: $HIGH\n  :large_orange_diamond: Medium: $MEDIUM\n  :white_circle: Low: $LOW\n\n*Target:* Backend Employee API\n*URL:* \`$URL\`\n*Recommendation:* Review medium-risk findings"
+        STATUS="🚨 FAILED - $HIGH High Risk Found"
     else
-        EMOJI=":shield:"
-        STATUS="PASSED"
-        
-        MESSAGE="$EMOJI *DAST - Backend Employee Directory*\n\n*Status:* $STATUS\n*Scan Date:* $(date '+%Y-%m-%d %H:%M:%S')\n\n*Results:*\n  Total: $TOTAL\n  :white_check_mark: High: $HIGH\n  :white_circle: Medium: $MEDIUM\n  :white_circle: Low: $LOW\n\n*Target:* Backend Employee API\n*URL:* \`$URL\`\n*Security Status:* No high-risk vulnerabilities detected"
+        STATUS="✅ PASSED - No High Risk Issues"
     fi
+    
+    MESSAGE="🛡️ *DAST - Backend Employee*\n\n*Status:* $STATUS\n\n*Results:*\n  High: $HIGH\n  Medium: $MEDIUM\n  Low: $LOW\n\n*Target:* Backend Employee API\n*Date:* $(date '+%Y-%m-%d %H:%M UTC')"
     
     curl -s -X POST "$SLACK_WEBHOOK" \
         -H 'Content-Type: application/json' \
-        -d "{\"text\":\"$MESSAGE\"}" \
-        > /dev/null 2>&1 || echo "Failed to send Slack notification"
+        -d "{\"text\":\"$MESSAGE\"}" || true
 fi
+
+# Cleanup
+echo ""
+echo "Cleaning up..."
+curl -s "http://localhost:$ZAP_PORT/JSON/core/action/shutdown/" > /dev/null 2>&1 || true
+sleep 2
+kill $ZAP_PID 2>/dev/null || true
+
+# Remove temp files
+rm -f "$ALERTS_FILE" "$SUMMARY_FILE" 2>/dev/null || true
 
 echo ""
 echo "=========================================="
@@ -358,12 +254,12 @@ echo "Scan completed: $(date)"
 echo "=========================================="
 echo ""
 
-if [ $SCAN_EXIT_CODE -eq 1 ]; then
-    echo "STATUS: FAILED (High-risk vulnerabilities found)"
-elif [ $SCAN_EXIT_CODE -eq 2 ]; then
-    echo "STATUS: ERROR (Scan parsing failed)"
+if [ $EXIT_CODE -eq 1 ]; then
+    echo "STATUS: ❌ FAILED (High-risk vulnerabilities found)"
+elif [ $EXIT_CODE -eq 2 ]; then
+    echo "STATUS: ⚠️ ERROR (Failed to parse results)"
 else
-    echo "STATUS: PASSED (No high-risk vulnerabilities)"
+    echo "STATUS: ✅ PASSED (No high-risk vulnerabilities)"
 fi
 
-exit $SCAN_EXIT_CODE
+exit $EXIT_CODE
