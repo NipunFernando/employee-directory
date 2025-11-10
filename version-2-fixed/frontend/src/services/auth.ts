@@ -30,7 +30,7 @@ export const getUserInfoFromCookie = (): UserInfo | null => {
 };
 
 // Get user info from /auth/userinfo endpoint
-// FIXED: Simplified to match working version-1 approach, but with better error handling
+// FIXED: Use text() first to check content before parsing JSON to avoid SyntaxError
 export const getUserInfo = async (): Promise<UserInfo | null> => {
   try {
     const response = await fetch('/auth/userinfo', {
@@ -47,30 +47,31 @@ export const getUserInfo = async (): Promise<UserInfo | null> => {
       return null;
     }
     
-    // FIXED: Check Content-Type before parsing JSON to avoid errors
-    const contentType = response.headers.get('content-type');
-    if (!contentType || !contentType.includes('application/json')) {
-      // Response is not JSON (might be HTML error page) - return null silently
+    // FIXED: Read as text first to check if it's JSON before parsing
+    // This prevents SyntaxError when HTML is returned
+    const text = await response.text();
+    
+    // Check if response is HTML (common error page indicator)
+    if (text.trim().toLowerCase().startsWith('<!doctype') || text.trim().startsWith('<')) {
+      // Response is HTML, not JSON - return null silently
       return null;
     }
     
-    // FIXED: Try to parse JSON, catch errors gracefully (handles HTML responses)
+    // Try to parse as JSON
     try {
-      const userInfo = await response.json();
+      const userInfo = JSON.parse(text);
       return userInfo;
     } catch (parseError) {
-      // Response was not valid JSON (might be HTML error page)
-      // This can happen during redirects or errors - return null silently
+      // Response was not valid JSON - return null silently
       return null;
     }
   } catch (error) {
     // FIXED: Only log network/fetch errors, not JSON parse errors
-    // JSON parse errors (SyntaxError) are handled in the inner try-catch above
-    // Only log actual network/fetch errors
+    // JSON parse errors are handled above by checking text content first
     if (error instanceof TypeError && error.message.includes('fetch')) {
       console.error('Error fetching user info:', error);
     } else if (!(error instanceof SyntaxError)) {
-      // Don't log SyntaxError (JSON parse errors) - those are expected for HTML responses
+      // Don't log SyntaxError - those are handled by text() approach above
       console.error('Error fetching user info:', error);
     }
     return null;
