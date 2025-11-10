@@ -185,6 +185,19 @@ echo ""
 # Ensure BASE_URL doesn't end with / for ZAP scanning
 SCAN_URL="${BASE_URL%/}"
 
+# Set ZAP_HOME and HOME to writable directory to avoid read-only filesystem errors
+# ZAP tries to write config files to /home/zap/, so we redirect to writable location
+export ZAP_HOME="$WORK_DIR/.zap"
+mkdir -p "$ZAP_HOME"
+
+# Create a fake home directory structure for ZAP
+ZAP_HOME_DIR="$WORK_DIR/home"
+mkdir -p "$ZAP_HOME_DIR/zap"
+export HOME="$ZAP_HOME_DIR"
+
+# Set ZAP user directory to writable location
+export ZAP_USER_DIR="$WORK_DIR/.zap"
+
 zap-baseline.py \
     -t "$SCAN_URL" \
     -z "-config testkey=$AUTH_TOKEN -script $WORK_DIR/add-test-key.js" \
