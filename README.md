@@ -165,6 +165,8 @@ Once deployed, the service exposes:
 ### 2. Frontend Application (React)
 
 Deploy the React frontend application to Choreo.
+<img width="1534" height="682" alt="image" src="https://github.com/user-attachments/assets/3419b7ed-c72d-4938-881b-0da6d7d75163" />
+
 
 #### Component Type
 **Service** (Web Application)
